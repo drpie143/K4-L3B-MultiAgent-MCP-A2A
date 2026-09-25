@@ -12,22 +12,26 @@ CAUSE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,79}$")
 CARRIER_KEYS = (
     "order_delivered_carrier_date",
     "delivered_carrier_date",
+    "delivered_carrier_at",
     "seller_handoff_at",
     "handoff_at",
 )
 CUSTOMER_DELIVERY_KEYS = (
     "order_delivered_customer_date",
     "delivered_customer_date",
+    "delivered_customer_at",
     "actual_delivery_date",
     "delivered_at",
 )
 ESTIMATED_DELIVERY_KEYS = (
     "order_estimated_delivery_date",
     "estimated_delivery_date",
+    "estimated_delivery_at",
     "expected_delivery_date",
 )
 SHIPPING_LIMIT_KEYS = (
     "shipping_limit_date",
+    "shipping_limit_at",
     "seller_shipping_limit",
     "handoff_limit",
 )

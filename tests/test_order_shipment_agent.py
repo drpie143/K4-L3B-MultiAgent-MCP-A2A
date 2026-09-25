@@ -120,4 +120,4 @@ def test_seller_handoff_after_limit_names_the_seller(tmp_path: Path) -> None:
     assert result.timeline_complete is True
     assert result.order_total_brl == 11
     assert result.candidate_causes[0].cause_code == "SELLER_SHIPMENT_DELAY"
-    assert gateway.calls == ["get_order_items", "get_shipment_summary"]
+    assert gateway.calls == ["get_shipment_summary", "get_order_items"]

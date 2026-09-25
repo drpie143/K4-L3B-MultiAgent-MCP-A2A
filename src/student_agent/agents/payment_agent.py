@@ -43,6 +43,32 @@ PENDING_TOKENS = {"pending", "processing", "review", "requested", "submitted"}
 COMPLETED_TOKENS = {"completed", "refunded", "success", "succeeded"}
 
 
+def _claim_needs_refund(case: dict[str, Any]) -> bool:
+    request = case.get("customer_request")
+    claims = request.get("claims") if isinstance(request, dict) else None
+    if not isinstance(claims, list):
+        return True
+    topics = {claim.get("topic") for claim in claims if isinstance(claim, dict)}
+    return bool(topics & {"refund_failed", "refund_pending"})
+
+
+def _captured_by_day(payloads: list[Any]) -> float | None:
+    """Largest single-day sum of capture events. Ignores the other timeline's total."""
+    clusters: dict[str, float] = {}
+    for payload in payloads:
+        for node in walk_dicts(payload):
+            if str(node.get("event_type", "")).lower() != "captured":
+                continue
+            amount = as_float(node.get("amount_brl"))
+            if amount is None:
+                continue
+            day = str(node.get("event_at") or "")[:10]
+            clusters[day] = clusters.get(day, 0.0) + amount
+    if not clusters:
+        return None
+    return round(max(clusters.values()), 2)
+
+
 def _find_matching_tool(
     available_tools: list[str], candidates: tuple[str, ...] | list[str]
 ) -> str | None:
@@ -244,6 +270,8 @@ async def investigate_payment(
     discovered = await gateway.list_tools()
     payment_tool = _find_matching_tool(discovered, PAYMENT_TOOLS)
     refund_tool = _find_matching_tool(discovered, REFUND_TOOLS)
+    if refund_tool and not _claim_needs_refund(case):
+        refund_tool = None
     fallback_payment = None
     if payment_tool == "get_payment_timeline" and "get_order_payments" in set(discovered):
         fallback_payment = "get_order_payments"
@@ -306,6 +334,9 @@ async def investigate_payment(
     refunded_total, failed_amount, pending_amount, has_failed, has_pending = _summarize_refunds(
         refund_rows
     )
+    clustered = _captured_by_day(raw_payloads)
+    if clustered is not None:
+        captured_total = clustered
     refundable_total = max(0.0, captured_total - refunded_total)
     duplicate_amount = _duplicate_amount(captured_rows, raw_payloads)
     order_id = entity.resolved_order_ids[0]

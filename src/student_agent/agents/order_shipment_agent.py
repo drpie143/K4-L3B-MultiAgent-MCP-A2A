@@ -382,8 +382,6 @@ async def investigate_order_shipment(
         return result
 
     session = _Session(case_id, gateway, await _discover(gateway))
-    raw_scope = case.get("investigation_scope")
-    scope = raw_scope if isinstance(raw_scope, dict) else {}
     opened_at = first_datetime(case, ("opened_at",))
     cached_orders = getattr(entity, "order_evidence", {})
     if not isinstance(cached_orders, dict):
@@ -399,33 +397,21 @@ async def investigate_order_shipment(
                 _consume(trace, case_id, ORDER_TOOL, order_payload)
         order_data = order_payload.get("data") if isinstance(order_payload, dict) else None
 
-        item_payload = await session.call(ITEM_TOOL, order_id=order_id)
-        if isinstance(item_payload, dict):
-            _consume(trace, case_id, ITEM_TOOL, item_payload)
-            ref = evidence_ref_of(item_payload)
-            if ref:
-                refs.append(ref)
         shipment_payload = await session.call(SHIPMENT_TOOL, order_id=order_id)
         if isinstance(shipment_payload, dict):
             _consume(trace, case_id, SHIPMENT_TOOL, shipment_payload)
             ref = evidence_ref_of(shipment_payload)
             if ref:
                 refs.append(ref)
-        if scope.get("include_product_context") is True:
-            product_payload = await session.call(PRODUCT_TOOL, order_id=order_id)
-            if isinstance(product_payload, dict):
-                _consume(trace, case_id, PRODUCT_TOOL, product_payload)
-                ref = evidence_ref_of(product_payload)
-                if ref:
-                    refs.append(ref)
-        views.append(
-            _analyze(
-                order_data,
-                item_payload.get("data") if isinstance(item_payload, dict) else None,
-                shipment_payload.get("data") if isinstance(shipment_payload, dict) else None,
-                opened_at=opened_at,
-            )
-        )
+        shipment_data = shipment_payload.get("data") if isinstance(shipment_payload, dict) else None
+        item_payload = await session.call(ITEM_TOOL, order_id=order_id)
+        if isinstance(item_payload, dict):
+            _consume(trace, case_id, ITEM_TOOL, item_payload)
+            ref = evidence_ref_of(item_payload)
+            if ref:
+                refs.append(ref)
+        item_data = item_payload.get("data") if isinstance(item_payload, dict) else None
+        views.append(_analyze(order_data, item_data, shipment_data, opened_at=opened_at))
 
     view = _aggregate(views)
     result = OrderShipmentResult(

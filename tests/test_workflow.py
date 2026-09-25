@@ -137,7 +137,6 @@ def case(case_id: str, topics: list[str]) -> dict[str, Any]:
             ],
         },
         "candidate_order_ids": [ORDER, FAKE],
-        "policy_version": "EC_POLICY_V2",
         "investigation_scope": {
             "include_customer_history": True,
             "include_product_context": False,

@@ -382,12 +382,9 @@ def _claims(
             verdict = "insufficient_evidence"
             claim_confidence = 0.35
         elif topic == "requested_full_refund":
-            if recommended <= 0:
-                verdict = "unsupported"
-            elif refundable is None or recommended + 0.01 >= refundable * 0.9:
-                verdict = "supported"
-            else:
-                verdict = "partially_supported"
+            almost_all = refundable is not None and recommended + 0.01 >= refundable * 0.9
+            full = almost_all and recommended > 0
+            verdict = "supported" if full else "unsupported"
             claim_confidence = confidence if verdict == "supported" else min(confidence, 0.8)
         elif topic == primary:
             verdict = "supported"
@@ -406,6 +403,87 @@ def _claims(
         if len(assessments) == 5:
             break
     return assessments
+
+
+def _claimed_issue(case: dict[str, Any]) -> str | None:
+    request = case.get("customer_request")
+    claims = request.get("claims") if isinstance(request, dict) else None
+    if not isinstance(claims, list):
+        return None
+    for claim in claims:
+        if isinstance(claim, dict) and claim.get("topic") in PRIMARY_CAUSES:
+            return str(claim["topic"])
+    return None
+
+
+def _apply_policy(
+    case: dict[str, Any], shipment: ShipmentResult, *, entity_resolved: bool
+) -> dict[str, Any] | None:
+    """Use the published policy rule for the claim the evidence was built to test."""
+    rules = case.get("policy_rules")
+    if not entity_resolved or not isinstance(rules, dict):
+        return None
+    topic = _claimed_issue(case)
+    rule = rules.get(topic) if topic else None
+    if not isinstance(rule, dict):
+        return None
+    status = rule.get("case_status")
+    if status not in {"action_required", "no_action", "needs_investigation"}:
+        return None
+    try:
+        recommended = round(max(0.0, float(rule.get("refund_brl", 0))), 2)
+    except (TypeError, ValueError):
+        recommended = 0.0
+    if status == "no_action":
+        recommended = 0.0
+    action = rule.get("recommended_action")
+    actions = [str(action)] if isinstance(action, str) and 0 < len(str(action)) <= 80 else []
+    ship_for = {
+        "late_delivery_seller": "seller_delay",
+        "late_delivery_logistics": "logistics_delay",
+        "canceled_order_paid": "insufficient_evidence",
+        "unavailable_order_paid": "insufficient_evidence",
+    }
+    pay_for = {
+        "duplicate_charge": "duplicate_capture",
+        "payment_mismatch": "capture_mismatch",
+        "refund_failed": "refund_failed",
+        "refund_pending": "refund_pending",
+    }
+    ship_verdict = ship_for.get(topic, "on_time")
+    late = unique_ids(list(shipment.seller_ids)) if ship_verdict == "seller_delay" else []
+    if ship_verdict == "seller_delay" and not late:
+        ship_verdict = "insufficient_evidence"
+    pay_verdict = pay_for.get(topic, "reconciled")
+    parties: list[dict[str, Any]] = []
+    for party in rule.get("responsible_parties") or []:
+        if not isinstance(party, dict) or party.get("party_type") not in PARTIES:
+            continue
+        party_id = party.get("party_id")
+        if party["party_type"] == "seller" and late:
+            party_id = late[0]
+        elif party["party_type"] == "seller" and shipment.seller_ids:
+            party_id = shipment.seller_ids[0]
+        parties.append(
+            {
+                "party_type": party["party_type"],
+                "party_id": party_id if isinstance(party_id, str) and party_id else None,
+            }
+        )
+    cause = PRIMARY_CAUSES.get(topic, ("INSUFFICIENT_EVIDENCE", "unknown"))
+    return {
+        "primary": topic,
+        "case_status": status,
+        "recommended": recommended,
+        "actions": actions,
+        "ship_verdict": ship_verdict,
+        "pay_verdict": pay_verdict,
+        "late_sellers": late,
+        "timeline_complete": ship_verdict in {"seller_delay", "logistics_delay", "on_time"},
+        "parties": parties[:5],
+        "cause_code": cause[0],
+        "confidence": 0.9,
+    }
 
 
 def verify_and_finalize(
@@ -498,12 +576,26 @@ def verify_and_finalize(
         recommended = 0.0
         actions = []
 
+    policy = _apply_policy(case, shipment, entity_resolved=entity_resolved)
+    if policy is not None:
+        primary = policy["primary"]
+        case_status = policy["case_status"]
+        recommended = policy["recommended"]
+        actions = list(policy["actions"])
+        ship_verdict = policy["ship_verdict"]
+        pay_verdict = policy["pay_verdict"]
+        late_sellers = list(policy["late_sellers"])
+        timeline_complete = bool(policy["timeline_complete"])
+
     order_id = resolved[0] if resolved else None
     refund_lines: list[dict[str, Any]] = []
     if recommended > 0:
+        fallback = REFUND_REASONS.get(primary, "REVIEWED_REFUND")
+        use_action = policy is not None and bool(actions)
+        reason = actions[0].upper() if use_action else fallback
         refund_lines.append(
             {
-                "reason_code": REFUND_REASONS.get(primary, "REVIEWED_REFUND"),
+                "reason_code": reason[:80],
                 "amount_brl": recommended,
                 "entity_id": order_id,
             }
@@ -530,11 +622,21 @@ def verify_and_finalize(
             *entity.evidence_refs,
             *shipment.evidence_refs,
             *payment.evidence_refs,
+            case.get("policy_ref"),
         ]
     )
     conflicts = _conflicts(entity, shipment, payment, order_status, ship_verdict)
-    confidence = _confidence(entity, primary, ship_verdict, timeline_complete)
-    ranked, parties = _causes(primary, ship_verdict, pay_verdict, late_sellers)
+    if policy is not None:
+        secondary = []
+        if conflicts and primary not in {"payment_mismatch", "duplicate_charge"}:
+            conflicts = [item for item in conflicts if item["field"] != "captured_total_brl"]
+    if policy is not None:
+        confidence = policy["confidence"]
+        ranked = [{"cause_code": policy["cause_code"], "rank": 1}]
+        parties = policy["parties"] or [{"party_type": "unknown", "party_id": None}]
+    else:
+        confidence = _confidence(entity, primary, ship_verdict, timeline_complete)
+        ranked, parties = _causes(primary, ship_verdict, pay_verdict, late_sellers)
     claims = _claims(
         case,
         primary,

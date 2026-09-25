@@ -205,6 +205,10 @@ async def resolve_entity(
         for candidate in pool:
             if candidate.order_id not in known:
                 candidate.decision = "NOT_IN_CUSTOMER_HISTORY"
+    for candidate in pool:
+        # Placeholder ids are never real orders. A failed lookup is still audited.
+        if candidate.decision is None and candidate.order_id.startswith("candidate-"):
+            candidate.decision = "NOT_FOUND"
 
     pending = [candidate for candidate in pool if candidate.decision is None]
     to_lookup, unassessed = pending[:MAX_ORDER_LOOKUPS], pending[MAX_ORDER_LOOKUPS:]
