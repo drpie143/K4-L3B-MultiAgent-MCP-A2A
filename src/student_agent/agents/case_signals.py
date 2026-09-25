@@ -250,6 +250,13 @@ def analyze(
     elif rows:
         signals.captured_total = round(sum(k[3] or 0.0 for k in keys), 2)
 
+    # The payment timeline flags reconciliation problems explicitly.
+    for event in _events(payments):
+        if "mismatch" in _text(event.get("event_type")) and _in_scope(
+            _ts(event.get("event_at")), opened
+        ):
+            signals.detected.add("payment_mismatch")
+
     row_total = sum(k[3] or 0.0 for k in keys)
     row_values = [k[3] for k in keys if k[3] is not None]
     if captures and (

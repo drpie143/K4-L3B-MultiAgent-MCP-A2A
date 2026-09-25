@@ -26,7 +26,7 @@ Trace chỉ chứa mã sự kiện và thuộc tính quan sát được (`verdic
 | entity-agent | raw case | Chọn order bằng evidence, loại candidate sai, lấy `customer_unique_id` | `get_order`, `get_customer_history` | `EntityResult` |
 | order-shipment-agent | `EntityResult` | Item, seller, timeline giao hàng, candidate cause | `get_order_items`, `get_shipment_summary`; `get_product_context` chỉ khi case bật cờ | `OrderShipmentResult` |
 | payment-agent | `EntityResult` | Capture, split, duplicate, refund | `get_payment_timeline` hoặc `get_order_payments`, `get_refund_timeline` | `PaymentResult` |
-| coordinator | case | Gọi entity trước, specialist song song sau khi resolve, lấy policy của case | `list_tools`, `get_policy` | handoff sang verifier, `policy_decided` |
+| coordinator | case | Gọi entity trước (song song với policy), specialist song song sau khi resolve | `list_tools` (cache), `get_policy` (1 lần/lượt) | handoff sang verifier, `policy_decided` |
 | verifier | ba result + policy | Đối chiếu tín hiệu evidence với khiếu nại, áp rule policy, ghi conflict, dựng output | không gọi MCP | dict đúng schema |
 
 Contract nội bộ là `src/student_agent/models/messages.py`: `EntityResult`, `ShipmentResult`, `PaymentResult`, `CandidateCause`, `FinancialResolution`.
@@ -75,6 +75,7 @@ Khi có policy (luồng chính), verifier dùng `agents/case_signals.py`:
 - Mỗi phiên bản order (order row, các dòng history) chỉ so với shipping limit của chính nó (limit nằm trong 30 ngày sau ngày mua).
 - Duplicate charge chỉ khi có dòng payment giống hệt nhau (cùng sequential, type, value); split credit + voucher không phải duplicate.
 - Khiếu nại được evidence xác nhận thì thành primary issue (confidence 0.92). Khiếu nại không được xác nhận nhường cho tín hiệu mạnh (refund failed/pending, duplicate, canceled/unavailable đã thu tiền, seller trễ). Không có tín hiệu nào thì giữ khiếu nại với confidence thấp.
+- Mỗi case có một dòng thời gian mồi dựng từ loại vấn đề khác (mỗi tín hiệu xuất hiện 20 lần: 10 case thật + 10 case mồi). Vì vậy `secondary_issues` để trống; `reconciliation_mismatch` trên payment timeline xác nhận `payment_mismatch`.
 - `case_status`, `recommended_refund_brl`, `resolution_actions` và `responsible_parties` lấy từ rule policy của primary issue. `party_id` seller mẫu trong policy được thay bằng seller có evidence trễ hạn.
 - Order row và history mâu thuẫn trạng thái thì ghi `data_conflicts` với `resolution_code` `COMPLAINT_TIMELINE_PRECEDENCE`.
 
@@ -93,7 +94,7 @@ Refund chỉ xuất hiện khi verdict tài chính hoặc hàng không giao đư
 | Conflict đã chọn được nguồn | 0 | ghi `data_conflicts` | `conflict_count` |
 | Conflict chưa chọn được | 0 | `needs_investigation` | `selected_source: null` |
 
-Mỗi case dùng 8 call: `get_customer_history`, `get_order` (order thật), `get_order_items`, `get_shipment_summary`, `get_product_context`, `get_payment_timeline`, `get_refund_timeline`, `get_policy`. Evidence được lưu ở `.mcp_store/<case_id>/` (`utils/evidence_store.py`, gitignore): chạy lại `day09 run` phát lại evidence đã lưu, giữ nguyên `evidence_ref`, không tạo call mới. Tắt bằng `DAY09_EVIDENCE_STORE=off`. Lỗi nghiệp vụ của tool cũng được lưu để không tra lại candidate sai; lỗi mạng thì không.
+Mỗi case dùng 5 call: `get_customer_history`, `get_order` (order thật), `get_order_items`, `get_shipment_summary`, `get_payment_timeline`; thêm `get_refund_timeline` chỉ khi khiếu nại là `refund_failed`/`refund_pending` (≈5.2 call/case). `get_policy` gọi **một lần mỗi lượt chạy** cho mỗi `policy_version` (policy giống nhau cho mọi case) và **không trích ref**: bản nộp trích ref `get_policy` bị 0 điểm toàn bộ. `get_product_context` không gọi vì không đổi kết luận và làm giảm precision evidence. `utils/evidence_store.py` (phát lại evidence từ `.mcp_store/`) chỉ dùng phân tích offline, mặc định tắt.
 
 Không gọi `get_sellers` khi item đã có `seller_id`. Không gọi lại `get_order` nếu entity đã cache envelope. `get_product_context` chỉ chạy khi `investigation_scope.include_product_context` là true. `get_order_payments` chỉ là fallback khi payment timeline không có dòng `payment_value`.
 
@@ -119,5 +120,7 @@ Trước khi trả output, verifier ép các bất biến sau:
 - Python `>=3.11`, dependency trong `pyproject.toml`.
 - Không có random seed. Hai specialist chạy bằng `asyncio.gather`; trace ghi đồng bộ trên event loop nên mỗi dòng JSONL là một event trọn vẹn.
 - Lệnh kiểm tra: `pytest -q`. Lệnh chạy submission: `day09 run` rồi `day09 validate`.
+- Tốc độ: `day09 run` xử lý `DAY09_CONCURRENCY` case cùng lúc (mặc định 4, tối đa 16) trên **một** phiên MCP, nên mọi `evidence_ref` thuộc cùng một run. Trong case: policy ∥ entity, items ∥ shipment, payment ∥ refund. Mỗi call có timeout `DAY09_CALL_TIMEOUT` giây (mặc định 45) và thử lại 1 lần thay vì chờ read timeout 300 s. Tiến độ in ra stderr: `[n/100] <case_id> (<giây>)`.
+- Bản nộp phải đến từ một lần `day09 run` liền mạch; không phát lại evidence của run cũ.
 - MCP tool được discovery từ server, không hard-code case id.
 - Team API key chỉ đọc từ môi trường lúc chạy. Không ghi vào output, trace hay git.

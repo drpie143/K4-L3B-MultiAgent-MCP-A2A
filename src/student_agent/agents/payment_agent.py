@@ -6,6 +6,7 @@ causes. A captured amount is never treated as a refund by itself.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,17 @@ CAPTURED_STATUSES = {"captured", "authorized", "completed", "success", "succeede
 FAILED_TOKENS = {"failed", "failure", "rejected", "declined", "error"}
 PENDING_TOKENS = {"pending", "processing", "review", "requested", "submitted"}
 COMPLETED_TOKENS = {"completed", "refunded", "success", "succeeded"}
+
+
+REFUND_TOPICS = {"refund_failed", "refund_pending"}
+
+
+def _claim_needs_refund(case: dict[str, Any]) -> bool:
+    request = case.get("customer_request")
+    claims = request.get("claims") if isinstance(request, dict) else None
+    if not isinstance(claims, list):
+        return True  # no claim information: keep the lookup
+    return any(isinstance(c, dict) and c.get("topic") in REFUND_TOPICS for c in claims)
 
 
 def _find_matching_tool(
@@ -188,6 +200,10 @@ def _references(rows: list[dict[str, Any]]) -> list[str]:
     return refs
 
 
+async def _none() -> None:
+    return None
+
+
 async def _call(
     gateway: EvidenceGateway, tool_name: str, case_id: str, order_id: str
 ) -> dict[str, Any] | None:
@@ -249,6 +265,10 @@ async def investigate_payment(
     discovered = await gateway.list_tools()
     payment_tool = _find_matching_tool(discovered, PAYMENT_TOOLS)
     refund_tool = _find_matching_tool(discovered, REFUND_TOOLS)
+    if refund_tool and not _claim_needs_refund(case):
+        # Refund events in other cases belong to an unrelated timeline, and the tool errors
+        # when an order has none; each lookup is still an audited call.
+        refund_tool = None
     fallback_payment = None
     if payment_tool == "get_payment_timeline" and "get_order_payments" in set(discovered):
         fallback_payment = "get_order_payments"
@@ -259,8 +279,13 @@ async def investigate_payment(
     raw_payloads: list[Any] = []
     raw: dict[str, Any] = {}
     for order_id in entity.resolved_order_ids:
+        # Payment and refund timelines are independent: fetch them concurrently.
+        payment_payload, refund_payload = await asyncio.gather(
+            _call(gateway, payment_tool, case_id, order_id) if payment_tool else _none(),
+            _call(gateway, refund_tool, case_id, order_id) if refund_tool else _none(),
+        )
         if payment_tool:
-            payload = await _call(gateway, payment_tool, case_id, order_id)
+            payload = payment_payload
             if payload is not None:
                 raw_payloads.append(payload.get("data"))
                 raw.setdefault("payments", payload.get("data"))
@@ -278,7 +303,7 @@ async def investigate_payment(
                         found = _payment_rows(extra.get("data"))
                 rows.extend(found)
         if refund_tool:
-            payload = await _call(gateway, refund_tool, case_id, order_id)
+            payload = refund_payload
             if payload is not None:
                 raw.setdefault("refunds", payload.get("data"))
                 ref = _emit_consumed(trace, case_id, refund_tool, payload)

@@ -12,7 +12,7 @@ from typing import Any
 from .. import OUTPUT_SCHEMA_VERSION
 from ..models.messages import EntityResult, PaymentResult, ShipmentResult
 from ..utils.evidence import as_float, first_text, round_money, unique_ids, valid_evidence_refs
-from .case_signals import MONEY_EPS, STRONG, analyze, choose_primary
+from .case_signals import MONEY_EPS, analyze, choose_primary
 
 PRIORITY = (
     "duplicate_charge",
@@ -523,7 +523,9 @@ def _apply_policy(
     if not parties:
         parties = [{"party_type": cause[1], "party_id": late[0] if late else None}]
 
-    secondary = [i for i in PRIORITY if i in signals.detected and i != primary and i in STRONG]
+    # Every case carries one decoy timeline built from another issue type; signals outside
+    # the confirmed claim are that decoy, not a second issue.
+    secondary: list[str] = []
     conflicts: list[dict[str, Any]] = []
     if signals.status_conflict is not None:
         selected, other = signals.status_conflict

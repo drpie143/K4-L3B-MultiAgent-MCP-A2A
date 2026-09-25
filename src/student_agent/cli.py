@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from .cases import load_case_set
@@ -40,24 +42,54 @@ async def _run(root: Path) -> None:
     trace_path.unlink(missing_ok=True)
     trace = TraceWriter(trace_path, contracts)
 
+    concurrency = _concurrency()
+    total = len(case_set.case_ids)
+    done = 0
+    started = time.monotonic()
+
     async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gateway:
         discovered_tools = await gateway.list_tools()
         if not discovered_tools:
             raise RuntimeError("MCP Gateway returned no tools")
-        for case_id in case_set.case_ids:
-            case = case_set.cases[case_id]
-            trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
-            output = await solve_case(case, gateway, trace)
-            contracts.validate_output(output, f"outputs/{case_id}.json")
-            if output.get("case_id") != case_id:
-                raise ValueError(f"solver returned a mismatched case_id for {case_id}")
-            target = output_root / f"{case_id}.json"
-            temporary = target.with_suffix(".json.tmp")
-            temporary.write_text(
-                json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            temporary.replace(target)
-            trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
+        # Cases are independent, so several run at once over the same MCP session (one run).
+        # Each case keeps its own case_received -> ... -> case_finalized order in the trace.
+        slots = asyncio.Semaphore(concurrency)
+
+        async def run_case(case_id: str) -> None:
+            nonlocal done
+            async with slots:
+                case = case_set.cases[case_id]
+                trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
+                output = await solve_case(case, gateway, trace)
+                contracts.validate_output(output, f"outputs/{case_id}.json")
+                if output.get("case_id") != case_id:
+                    raise ValueError(f"solver returned a mismatched case_id for {case_id}")
+                target = output_root / f"{case_id}.json"
+                temporary = target.with_suffix(".json.tmp")
+                temporary.write_text(
+                    json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
+                temporary.replace(target)
+                trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
+                done += 1
+                elapsed = time.monotonic() - started
+                print(f"[{done}/{total}] {case_id} ({elapsed:.0f}s)", file=sys.stderr, flush=True)
+
+        try:
+            async with asyncio.TaskGroup() as group:
+                for case_id in case_set.case_ids:
+                    group.create_task(run_case(case_id))
+        except ExceptionGroup as failure:  # surface the first real error to main()
+            raise failure.exceptions[0] from None
+
+
+def _concurrency() -> int:
+    """Cases solved at once (DAY09_CONCURRENCY, default 4, capped at 16)."""
+    try:
+        value = int(os.getenv("DAY09_CONCURRENCY", "4"))
+    except ValueError:
+        value = 4
+    return max(1, min(16, value))
 
 
 def parser() -> argparse.ArgumentParser:

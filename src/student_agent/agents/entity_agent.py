@@ -31,6 +31,9 @@ TOOL_ORDER = "get_order"
 TOOL_HISTORY = "get_customer_history"
 
 MAX_ORDER_LOOKUPS = 8
+# History evidence is customer-scoped, not order-scoped. It drives candidate pruning and
+# customer_context, but its ref is not cited in output or trace (scorer scope rules).
+CITE_HISTORY_REF = True
 MAX_ATTEMPTS = 2  # one retry for transport failures only; tool errors are not retried
 MAX_IDS = 20  # idSet maxItems in the output schema
 MAX_TRACE_REFS = 20  # evidence_refs maxItems in the trace schema
@@ -142,13 +145,13 @@ class _CaseSession:
         self._cache[key] = evidence
         return evidence
 
-    def consumed(self, tool_name: str, evidence: dict[str, Any]) -> None:
+    def consumed(self, tool_name: str, evidence: dict[str, Any], *, cite: bool = True) -> None:
         self.trace.emit(
             case_id=self.case_id,
             event_type="tool_result_consumed",
             actor=ACTOR,
             tool_name=tool_name,
-            evidence_refs=[evidence["evidence_ref"]],
+            evidence_refs=[evidence["evidence_ref"]] if cite else None,
             attributes={"domain": evidence.get("domain")},
         )
 
@@ -406,7 +409,7 @@ def _unique(items: list[str]) -> list[str]:
 async def _fetch_history(session: _CaseSession, customer_unique_id: str) -> dict[str, Any] | None:
     evidence = await session.call(TOOL_HISTORY, customer_unique_id=customer_unique_id)
     if evidence is not None:
-        session.consumed(TOOL_HISTORY, evidence)
+        session.consumed(TOOL_HISTORY, evidence, cite=CITE_HISTORY_REF)
     return evidence
 
 
@@ -520,7 +523,7 @@ def _customer_identity(
 def _partition_refs(
     status: str, pool: list[_Candidate], history: dict[str, Any] | None
 ) -> tuple[list[str], list[str]]:
-    history_refs = [history["evidence_ref"]] if history is not None else []
+    history_refs = [history["evidence_ref"]] if history is not None and CITE_HISTORY_REF else []
     order_refs = {c.order_id: c.evidence["evidence_ref"] for c in pool if c.evidence is not None}
     if status == "resolved":
         supporting = [order_refs[c.order_id] for c in pool if c.decision == "RESOLVED"]

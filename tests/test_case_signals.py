@@ -165,3 +165,72 @@ def test_verifier_takes_refund_action_and_parties_from_policy() -> None:
     assert output["root_cause_analysis"]["responsible_parties"] == [
         {"party_type": "seller", "party_id": SELLER}
     ]
+
+
+def test_reconciliation_mismatch_event_confirms_a_mismatch_claim() -> None:
+    payments = {
+        "payments": [
+            {"payment_sequential": "1", "payment_type": "credit_card", "payment_value": "35.00"}
+        ],
+        "events": [
+            {"event_at": "2018-01-02T10:00:00-03:00", "event_type": "captured", "amount_brl": "35"},
+            {
+                "event_at": "2018-01-02T12:00:00-03:00",
+                "event_type": "reconciliation_mismatch",
+                "amount_brl": "35.00",
+                "status": "open",
+            },
+        ],
+    }
+    detected = analyze(CASE, ORDER, payments=payments).detected
+    assert "payment_mismatch" in detected
+    assert choose_primary(["payment_mismatch", "requested_full_refund"], detected)[0] == (
+        "payment_mismatch"
+    )
+
+
+def test_policy_is_fetched_once_per_session_and_never_cited(tmp_path: Path) -> None:
+    import asyncio
+    import hashlib
+
+    from student_agent.trace import TraceWriter
+    from student_agent.workflow import solve_case
+
+    def envelope(domain: str, data: object, tag: str) -> dict:
+        digest = hashlib.sha256(tag.encode()).hexdigest()
+        return {
+            "schema_version": "day09-mcp-evidence-v1",
+            "evidence_ref": f"ev_{digest[:32]}",
+            "result_hash": f"sha256:{digest}",
+            "domain": domain,
+            "data": data,
+        }
+
+    policy = envelope("policy", POLICY, "policy")
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def list_tools(self) -> list[str]:
+            return ["get_order", "get_policy"]
+
+        async def call(self, tool_name: str, *, case_id: str, **arguments: str) -> dict:
+            self.calls.append((tool_name, case_id))
+            if tool_name == "get_policy":
+                return policy
+            raise RuntimeError("not found")
+
+    gateway = Gateway()
+    trace = TraceWriter(tmp_path / "trace.jsonl", Contracts(ROOT / "contracts" / "schemas"))
+
+    async def run_two() -> list[dict]:
+        cases = [
+            dict(CASE, case_id=f"L3B_CASE_00{i}", policy_version="EC_POLICY_V2") for i in (1, 2)
+        ]
+        return list(await asyncio.gather(*(solve_case(c, gateway, trace) for c in cases)))
+
+    outputs = asyncio.run(run_two())
+    assert [c for c in gateway.calls if c[0] == "get_policy"] == [("get_policy", "L3B_CASE_001")]
+    assert all(policy["evidence_ref"] not in o["evidence_refs"] for o in outputs)
+    assert policy["evidence_ref"] not in trace.path.read_text(encoding="utf-8")

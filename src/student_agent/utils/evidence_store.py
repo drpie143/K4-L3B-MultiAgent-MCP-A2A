@@ -1,14 +1,15 @@
 """Persistent, case-scoped store of MCP evidence envelopes.
 
-Every MCP call is audited, so the same ``(case_id, tool, arguments)`` is fetched from the
-server once and replayed from disk afterwards. Replayed envelopes keep their original
-``evidence_ref``: the ref was issued to this team for this case, so provenance holds.
+Records each ``(case_id, tool, arguments)`` envelope once and replays it from disk, so the
+workflow logic can be re-run offline on real data without new MCP calls.
 
 Layout: ``<root>/<case_id>/<tool>__<sha1(arguments)>.json``. Keys always include the
 case_id, so evidence is never shared across cases. Deterministic tool errors are stored
 too, so a wrong candidate is not looked up twice; transport errors are never stored.
 
-Disable with ``DAY09_EVIDENCE_STORE=off``; point elsewhere with ``DAY09_EVIDENCE_STORE=<dir>``.
+Off by default. The scorer ties every evidence_ref to the MCP run (connection) that issued
+it, so a submission must come from one uninterrupted live run; replayed refs from an earlier
+run are cross-scope. Enable only for offline analysis: ``DAY09_EVIDENCE_STORE=.mcp_store``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 
 def store_root() -> Path | None:
-    value = os.getenv("DAY09_EVIDENCE_STORE", DEFAULT_ROOT).strip()
+    value = os.getenv("DAY09_EVIDENCE_STORE", "off").strip()
     if value.lower() in {"", "off", "0", "false", "no"}:
         return None
     return Path(value).resolve()
