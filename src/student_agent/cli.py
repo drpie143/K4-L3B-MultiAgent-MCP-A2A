@@ -51,7 +51,7 @@ async def _run(root: Path) -> None:
         discovered_tools = await gateway.list_tools()
         if not discovered_tools:
             raise RuntimeError("MCP Gateway returned no tools")
-        # Cases are independent, so several run at once over the same MCP session (one run).
+        # With DAY09_CONCURRENCY > 1, several cases run at once over the same MCP session.
         # Each case keeps its own case_received -> ... -> case_finalized order in the trace.
         slots = asyncio.Semaphore(concurrency)
 
@@ -84,11 +84,15 @@ async def _run(root: Path) -> None:
 
 
 def _concurrency() -> int:
-    """Cases solved at once (DAY09_CONCURRENCY, default 4, capped at 16)."""
+    """Cases solved at once (DAY09_CONCURRENCY, default 1, capped at 16).
+
+    Default 1 keeps each case's MCP calls contiguous on the session. Calls inside one
+    case still run in parallel. Raise it only once a concurrent run has scored.
+    """
     try:
-        value = int(os.getenv("DAY09_CONCURRENCY", "4"))
+        value = int(os.getenv("DAY09_CONCURRENCY", "1"))
     except ValueError:
-        value = 4
+        value = 1
     return max(1, min(16, value))
 
 

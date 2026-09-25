@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from student_agent.agents.case_signals import analyze, choose_primary
@@ -233,4 +234,11 @@ def test_policy_is_fetched_once_per_session_and_never_cited(tmp_path: Path) -> N
     outputs = asyncio.run(run_two())
     assert [c for c in gateway.calls if c[0] == "get_policy"] == [("get_policy", "L3B_CASE_001")]
     assert all(policy["evidence_ref"] not in o["evidence_refs"] for o in outputs)
-    assert policy["evidence_ref"] not in trace.path.read_text(encoding="utf-8")
+    text = trace.path.read_text(encoding="utf-8")
+    assert policy["evidence_ref"] not in text
+    consumed = [
+        json.loads(line)["case_id"]
+        for line in text.splitlines()
+        if '"tool_name":"get_policy"' in line
+    ]
+    assert consumed == ["L3B_CASE_001"]  # only the case that made the call

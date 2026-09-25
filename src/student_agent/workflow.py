@@ -173,17 +173,15 @@ async def solve_case(
             _payment(case, entity, gateway, trace),
         )
     policy, fetched_now = await policy_task
-    if policy is not None:
+    # Only the case that actually called get_policy records consuming it: the trace must
+    # match the MCP audit for each case. Other cases apply the same rules (policy_decided).
+    if policy is not None and fetched_now:
         trace.emit(
             case_id=case_id,
             event_type="tool_result_consumed",
             actor="coordinator",
             tool_name=POLICY_TOOL,
-            attributes={
-                "domain": "policy",
-                "policy_version": str(case.get("policy_version")),
-                "shared_across_cases": not fetched_now,
-            },
+            attributes={"domain": "policy", "policy_version": str(case.get("policy_version"))},
         )
 
     trace.emit(
