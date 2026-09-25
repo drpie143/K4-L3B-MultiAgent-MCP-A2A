@@ -130,11 +130,11 @@ class _CaseSession:
                 try:
                     evidence = await self.gateway.call(tool_name, case_id=self.case_id, **arguments)
                     break
-                except (RuntimeError, ValueError):
-                    break  # deterministic tool error or invalid envelope: do not retry
                 except Exception:
                     if attempt == MAX_ATTEMPTS:
                         break
+                    import asyncio
+                    await asyncio.sleep(2 * attempt)
         self._cache[key] = evidence
         return evidence
 

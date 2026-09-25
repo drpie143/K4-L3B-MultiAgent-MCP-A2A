@@ -90,11 +90,11 @@ class _Session:
                         tool_name, case_id=self.case_id, **arguments
                     )
                     break
-                except (RuntimeError, ValueError):
-                    break
                 except Exception:
                     if attempt == MAX_ATTEMPTS:
                         break
+                    import asyncio
+                    await asyncio.sleep(2 * attempt)
         self.cache.put(self.case_id, tool_name, arguments, evidence)
         return evidence
 

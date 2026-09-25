@@ -186,11 +186,16 @@ def _references(rows: list[dict[str, Any]]) -> list[str]:
 async def _call(
     gateway: EvidenceGateway, tool_name: str, case_id: str, order_id: str
 ) -> dict[str, Any] | None:
-    try:
-        payload = await gateway.call(tool_name, case_id=case_id, order_id=order_id)
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
+    import asyncio
+    for attempt in range(1, 6):
+        try:
+            payload = await gateway.call(tool_name, case_id=case_id, order_id=order_id)
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            if attempt == 5:
+                return None
+            await asyncio.sleep(2 * attempt)
+    return None
 
 
 def _emit_consumed(
