@@ -190,24 +190,21 @@ def test_reconciliation_mismatch_event_confirms_a_mismatch_claim() -> None:
     )
 
 
-def test_policy_is_fetched_once_per_session_and_never_cited(tmp_path: Path) -> None:
+def test_policy_is_called_per_case_and_never_cited(tmp_path: Path) -> None:
     import asyncio
     import hashlib
 
     from student_agent.trace import TraceWriter
     from student_agent.workflow import solve_case
 
-    def envelope(domain: str, data: object, tag: str) -> dict:
-        digest = hashlib.sha256(tag.encode()).hexdigest()
-        return {
-            "schema_version": "day09-mcp-evidence-v1",
-            "evidence_ref": f"ev_{digest[:32]}",
-            "result_hash": f"sha256:{digest}",
-            "domain": domain,
-            "data": data,
-        }
-
-    policy = envelope("policy", POLICY, "policy")
+    digest = hashlib.sha256(b"policy").hexdigest()
+    policy = {
+        "schema_version": "day09-mcp-evidence-v1",
+        "evidence_ref": f"ev_{digest[:32]}",
+        "result_hash": f"sha256:{digest}",
+        "domain": "policy",
+        "data": POLICY,
+    }
 
     class Gateway:
         def __init__(self) -> None:
@@ -224,15 +221,14 @@ def test_policy_is_fetched_once_per_session_and_never_cited(tmp_path: Path) -> N
 
     gateway = Gateway()
     trace = TraceWriter(tmp_path / "trace.jsonl", Contracts(ROOT / "contracts" / "schemas"))
+    cases = [dict(CASE, case_id=f"L3B_CASE_00{i}", policy_version="EC_POLICY_V2") for i in (1, 2)]
 
-    async def run_two() -> list[dict]:
-        cases = [
-            dict(CASE, case_id=f"L3B_CASE_00{i}", policy_version="EC_POLICY_V2") for i in (1, 2)
-        ]
-        return list(await asyncio.gather(*(solve_case(c, gateway, trace) for c in cases)))
+    async def run_both() -> list[dict]:
+        return [await solve_case(c, gateway, trace) for c in cases]
 
-    outputs = asyncio.run(run_two())
-    assert [c for c in gateway.calls if c[0] == "get_policy"] == [("get_policy", "L3B_CASE_001")]
+    outputs = asyncio.run(run_both())
+    policy_calls = [c for c in gateway.calls if c[0] == "get_policy"]
+    assert policy_calls == [("get_policy", "L3B_CASE_001"), ("get_policy", "L3B_CASE_002")]
     assert all(policy["evidence_ref"] not in o["evidence_refs"] for o in outputs)
     text = trace.path.read_text(encoding="utf-8")
     assert policy["evidence_ref"] not in text
@@ -241,4 +237,4 @@ def test_policy_is_fetched_once_per_session_and_never_cited(tmp_path: Path) -> N
         for line in text.splitlines()
         if '"tool_name":"get_policy"' in line
     ]
-    assert consumed == ["L3B_CASE_001"]  # only the case that made the call
+    assert consumed == ["L3B_CASE_001", "L3B_CASE_002"]

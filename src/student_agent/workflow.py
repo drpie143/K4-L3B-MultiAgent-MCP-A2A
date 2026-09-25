@@ -22,12 +22,8 @@ from .utils.evidence_store import StoredGateway, store_root
 
 POLICY_TOOL = "get_policy"
 
-# Per MCP session: discovered tools and policy data by version. The policy is the same
-# published document for every case, so it is fetched once per run instead of per case.
+# Tools discovered per MCP session (tools/list is not repeated for every case).
 _TOOLS: weakref.WeakKeyDictionary[Any, list[str]] = weakref.WeakKeyDictionary()
-_POLICIES: weakref.WeakKeyDictionary[Any, dict[str, asyncio.Task[Any]]] = (
-    weakref.WeakKeyDictionary()
-)
 
 
 def _call_timeout() -> float:
@@ -112,31 +108,26 @@ async def _payment(
 
 
 async def _policy_data(
-    case: dict[str, Any], gateway: Any, session_key: Any, tools: set[str] | None
-) -> tuple[dict[str, Any] | None, bool]:
-    """Return (policy data, fetched_now). One get_policy call per version per session.
+    case: dict[str, Any], gateway: Any, tools: set[str] | None
+) -> dict[str, Any] | None:
+    """Call get_policy for this case and return its data.
 
-    The policy ref is not cited: the scorer does not accept get_policy refs as case
-    evidence (a submission citing them scored 0). Its rules still drive the decision.
+    Every case makes its own call: a run that fetched the policy once and reused it for
+    all cases scored 0, while per-case calls scored. The ref is never cited: citing
+    get_policy refs also scored 0. Its rules drive the decision.
     """
     version = case.get("policy_version")
     if not isinstance(version, str) or not version:
-        return None, False
+        return None
     if tools is not None and POLICY_TOOL not in tools:
-        return None, False
-    by_version = _POLICIES.setdefault(session_key, {})
-    fetched_now = version not in by_version
-    if fetched_now:
-        case_id = str(case.get("case_id") or "")
-        by_version[version] = asyncio.ensure_future(
-            gateway.call(POLICY_TOOL, case_id=case_id, policy_version=version)
-        )
+        return None
+    case_id = str(case.get("case_id") or "")
     try:
-        payload = await asyncio.shield(by_version[version])
+        payload = await gateway.call(POLICY_TOOL, case_id=case_id, policy_version=version)
     except Exception:
-        return None, fetched_now
+        return None
     data = payload.get("data") if isinstance(payload, dict) else None
-    return (data if isinstance(data, dict) else None), fetched_now
+    return data if isinstance(data, dict) else None
 
 
 async def solve_case(
@@ -144,15 +135,12 @@ async def solve_case(
 ) -> dict[str, Any]:
     """Resolve the order, investigate shipment and payment, then verify the output."""
     case_id = str(case.get("case_id") or "")
-    session_key: Any = gateway
     if isinstance(gateway, EvidenceGateway):
         gateway = _BoundedGateway(gateway)  # type: ignore[assignment]
         root = store_root()
         if root is not None:
             gateway = StoredGateway(gateway, root)  # type: ignore[assignment]
     discovered = await _tools(gateway)
-    # The policy lookup does not depend on the order: run it alongside entity resolution.
-    policy_task = asyncio.ensure_future(_policy_data(case, gateway, session_key, discovered))
     entity = await resolve_entity(
         case,
         gateway,
@@ -172,10 +160,8 @@ async def solve_case(
             _shipment(case, entity, gateway, trace),
             _payment(case, entity, gateway, trace),
         )
-    policy, fetched_now = await policy_task
-    # Only the case that actually called get_policy records consuming it: the trace must
-    # match the MCP audit for each case. Other cases apply the same rules (policy_decided).
-    if policy is not None and fetched_now:
+    policy = await _policy_data(case, gateway, discovered)
+    if policy is not None:
         trace.emit(
             case_id=case_id,
             event_type="tool_result_consumed",

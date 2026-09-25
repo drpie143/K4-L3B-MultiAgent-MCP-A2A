@@ -48,52 +48,62 @@ async def _run(root: Path) -> None:
     started = time.monotonic()
 
     async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gateway:
-        discovered_tools = await gateway.list_tools()
-        if not discovered_tools:
+        if not await gateway.list_tools():
             raise RuntimeError("MCP Gateway returned no tools")
-        # With DAY09_CONCURRENCY > 1, several cases run at once over the same MCP session.
-        # Each case keeps its own case_received -> ... -> case_finalized order in the trace.
-        slots = asyncio.Semaphore(concurrency)
 
-        async def run_case(case_id: str) -> None:
-            nonlocal done
-            async with slots:
-                case = case_set.cases[case_id]
-                trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
-                output = await solve_case(case, gateway, trace)
-                contracts.validate_output(output, f"outputs/{case_id}.json")
-                if output.get("case_id") != case_id:
-                    raise ValueError(f"solver returned a mismatched case_id for {case_id}")
-                target = output_root / f"{case_id}.json"
-                temporary = target.with_suffix(".json.tmp")
-                temporary.write_text(
-                    json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-                )
-                temporary.replace(target)
-                trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
-                done += 1
-                elapsed = time.monotonic() - started
-                print(f"[{done}/{total}] {case_id} ({elapsed:.0f}s)", file=sys.stderr, flush=True)
+    # Each case gets its own MCP connection, so a case's calls never interleave with another
+    # case's on one session; up to DAY09_CONCURRENCY cases run at once.
+    slots = asyncio.Semaphore(concurrency)
 
-        try:
-            async with asyncio.TaskGroup() as group:
-                for case_id in case_set.case_ids:
-                    group.create_task(run_case(case_id))
-        except ExceptionGroup as failure:  # surface the first real error to main()
-            raise failure.exceptions[0] from None
+    async def run_case(case_id: str) -> None:
+        nonlocal done
+        case = case_set.cases[case_id]
+        async with slots:
+            for attempt in (1, 2, 3):
+                received = False
+                try:
+                    async with connect_gateway(
+                        settings.mcp_endpoint, settings.team_api_key, contracts
+                    ) as gateway:
+                        trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
+                        received = True
+                        output = await solve_case(case, gateway, trace)
+                    break
+                except Exception:
+                    # Retry only a failed connection: once the case started, a retry would
+                    # duplicate its trace and its audited calls.
+                    if received or attempt == 3:
+                        raise
+                    await asyncio.sleep(1.0 * attempt)
+            contracts.validate_output(output, f"outputs/{case_id}.json")
+            if output.get("case_id") != case_id:
+                raise ValueError(f"solver returned a mismatched case_id for {case_id}")
+            target = output_root / f"{case_id}.json"
+            temporary = target.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            temporary.replace(target)
+            trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
+            done += 1
+            elapsed = time.monotonic() - started
+            print(f"[{done}/{total}] {case_id} ({elapsed:.0f}s)", file=sys.stderr, flush=True)
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            for case_id in case_set.case_ids:
+                group.create_task(run_case(case_id))
+    except ExceptionGroup as failure:  # surface the first real error to main()
+        raise failure.exceptions[0] from None
 
 
 def _concurrency() -> int:
-    """Cases solved at once (DAY09_CONCURRENCY, default 1, capped at 16).
-
-    Default 1 keeps each case's MCP calls contiguous on the session. Calls inside one
-    case still run in parallel. Raise it only once a concurrent run has scored.
-    """
+    """Cases solved at once, each on its own MCP connection (DAY09_CONCURRENCY, default 8)."""
     try:
-        value = int(os.getenv("DAY09_CONCURRENCY", "1"))
+        value = int(os.getenv("DAY09_CONCURRENCY", "8"))
     except ValueError:
-        value = 1
-    return max(1, min(16, value))
+        value = 8
+    return max(1, min(20, value))
 
 
 def parser() -> argparse.ArgumentParser:

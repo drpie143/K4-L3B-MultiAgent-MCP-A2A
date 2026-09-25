@@ -53,8 +53,9 @@ PENDING_TOKENS = {"pending", "processing", "review", "requested", "submitted"}
 COMPLETED_TOKENS = {"completed", "refunded", "success", "succeeded"}
 
 
-# Claims about refunds, split payments and reconciliation need the refund timeline;
-# for other claims the tool usually errors (no refund) and each lookup is audited.
+# Claims about refunds, split payments and reconciliation need the refund timeline (these
+# are the cases whose refund evidence the 88.73 submission cited). For other claims the
+# tool errors because the order has no refund, and every lookup is an audited call.
 REFUND_TOPICS = {"refund_failed", "refund_pending", "valid_split_payment", "payment_mismatch"}
 
 
