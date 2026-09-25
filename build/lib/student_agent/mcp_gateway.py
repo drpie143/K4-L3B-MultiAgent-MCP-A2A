@@ -24,10 +24,7 @@ class EvidenceGateway:
     async def call(self, tool_name: str, *, case_id: str, **arguments: str) -> dict[str, Any]:
         payload = {"case_id": case_id, **arguments}
         result = await self._session.call_tool(tool_name, arguments=payload)
-        failed = getattr(result, "isError", None)
-        if failed is None:
-            failed = getattr(result, "is_error", False)
-        if failed:
+        if result.isError:
             message = " ".join(
                 block.text for block in result.content if getattr(block, "text", None)
             )

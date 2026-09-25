@@ -1,0 +1,556 @@
+PHÂN CHIA TASK NHÓM 4 NGƯỜI
+Repo: drpie143/K4-L3B-MultiAgent-MCP-A2A
+
+1. TỔNG QUAN KIẾN TRÚC ĐỀ XUẤT
+
+Cấu trúc nên dùng:
+
+src/student_agent/
+├── __init__.py
+├── cases.py
+├── cli.py
+├── config.py
+├── contracts.py
+├── mcp_gateway.py
+├── submission.py
+├── trace.py
+├── workflow.py
+├── models/
+│   ├── __init__.py
+│   └── messages.py
+├── agents/
+│   ├── __init__.py
+│   ├── entity_agent.py
+│   ├── order_shipment_agent.py
+│   ├── payment_agent.py
+│   └── verifier_agent.py
+└── utils/
+    ├── evidence.py
+    └── cache.py
+
+Luồng tổng thể:
+
+Case input
+   ↓
+Entity Resolver
+   ↓
+Coordinator
+   ├──────────────→ Order + Shipment Agent
+   │
+   └──────────────→ Payment + Refund Agent
+                         ↓
+                  Conflict / Verification
+                         ↓
+                    Final Output
+
+==================================================
+2. CHIA TASK CHO 4 NGƯỜI
+==================================================
+
+NGƯỜI 1 — ENTITY RESOLUTION + CUSTOMER CONTEXT
+
+File ownership:
+- src/student_agent/agents/entity_agent.py
+- tests/test_entity_agent.py
+
+Nhiệm vụ:
+- Nhận raw case.
+- Xử lý candidate order.
+- Dùng MCP evidence để resolve đúng order.
+- Xác định customer_unique_id.
+- Lấy customer history nếu cần.
+- Trả về:
+  + entity_resolution
+  + customer_context
+  + affected_entities.order_ids
+  + evidence_refs
+
+Output nội bộ gợi ý:
+
+{
+    "status": "resolved | ambiguous | not_found",
+    "resolved_order_ids": [],
+    "rejected_candidates": [],
+    "confidence": 0.0,
+    "customer_unique_id": null,
+    "related_order_ids": [],
+    "evidence_refs": []
+}
+
+Ràng buộc:
+- Không được chọn candidate đầu tiên một cách mặc định.
+- Không được đoán nếu evidence chưa đủ.
+- Nếu không chắc:
+  + status = "ambiguous"
+  hoặc
+  + status = "not_found"
+- Mọi MCP call phải dùng đúng case_id.
+- Không được tự tạo evidence_ref.
+
+Trace cần có:
+- task_assigned
+- tool_result_consumed
+- handoff
+
+
+NGƯỜI 2 — ORDER / PRODUCT + SHIPMENT
+
+File ownership:
+- src/student_agent/agents/order_shipment_agent.py
+- tests/test_order_shipment_agent.py
+
+Nhiệm vụ:
+- Điều tra:
+  + order status
+  + product/item
+  + seller
+  + shipment
+  + delivery timeline
+  + expected delivery
+  + actual delivery
+  + seller handoff
+  + carrier/logistics
+  + lost/returned
+
+Output chính:
+- affected_entities.item_ids
+- affected_entities.seller_ids
+- affected_entities.shipment_ids
+- shipment_analysis
+
+Schema shipment_analysis:
+
+{
+    "verdict": "...",
+    "late_seller_ids": [],
+    "timeline_complete": true
+}
+
+Các giá trị verdict hợp lệ:
+- on_time
+- seller_delay
+- logistics_delay
+- lost
+- returned
+- conflicting
+- insufficient_evidence
+
+Ngoài ra có thể trả candidate causes cho coordinator:
+
+{
+    "shipment_analysis": {...},
+    "candidate_causes": [
+        {
+            "cause_code": "SELLER_SHIPMENT_DELAY",
+            "party_type": "seller",
+            "party_id": "..."
+        }
+    ],
+    "evidence_refs": [...]
+}
+
+Ràng buộc:
+- Không tự tạo verdict ngoài schema.
+- Không tự finalize root cause cuối cùng.
+- Chỉ trả candidate causes.
+- Không dùng evidence chéo case.
+
+
+NGƯỜI 3 — PAYMENT / REFUND / FINANCIAL
+
+File ownership:
+- src/student_agent/agents/payment_agent.py
+- tests/test_payment_agent.py
+
+Nhiệm vụ:
+- Điều tra:
+  + payment captures
+  + payment split
+  + duplicate charge
+  + refund
+  + refund pending
+  + refund failed
+  + refund completed
+  + refundable amount
+
+Output chính:
+- affected_entities.payment_references
+- payment_analysis
+- financial_resolution
+
+Schema payment_analysis:
+
+{
+    "verdict": "...",
+    "captured_total_brl": ...,
+    "refunded_total_brl": ...,
+    "refundable_total_brl": ...
+}
+
+Các giá trị verdict hợp lệ:
+- reconciled
+- capture_mismatch
+- duplicate_capture
+- refund_pending
+- refund_failed
+- refunded
+- insufficient_evidence
+
+Financial resolution:
+
+{
+    "currency": "BRL",
+    "recommended_refund_brl": 0,
+    "refund_lines": []
+}
+
+Ràng buộc:
+- Không được lấy payment amount rồi mặc định đó là refund.
+- Refund phải dựa trên evidence.
+- Phải tránh double-count refund.
+- Giữ đầy đủ evidence_refs.
+
+
+NGƯỜI 4 — COORDINATOR + CONFLICT RESOLVER + VERIFIER + INTEGRATION
+
+File ownership:
+- src/student_agent/workflow.py
+- src/student_agent/agents/verifier_agent.py
+- tests/test_workflow.py
+- ARCHITECTURE.md
+
+Nhiệm vụ:
+- Orchestrate toàn bộ workflow.
+- Gọi Entity Agent trước.
+- Nếu entity unresolved thì xử lý fallback an toàn.
+- Nếu resolve được thì gọi song song:
+  + Order/Shipment Agent
+  + Payment/Refund Agent
+- Tổng hợp kết quả.
+- Resolve data conflicts.
+- Verify consistency.
+- Tạo final output đúng schema.
+
+Luồng gợi ý:
+
+case
+ ↓
+entity_agent
+ ↓
+if unresolved
+    → finalize insufficient evidence
+else
+    ↓
+ ┌────────────────────────┐
+ │                        │
+order/shipment       payment/refund
+ │                        │
+ └────────────┬───────────┘
+              ↓
+        conflict resolver
+              ↓
+           verifier
+              ↓
+         final output
+
+Có thể dùng asyncio.gather để chạy 2 specialist song song.
+
+==================================================
+3. DATA CONFLICTS
+==================================================
+
+Coordinator phải xử lý data_conflicts.
+
+Ví dụ:
+- Order service nói delivered = true
+- Shipment service nói shipment_status = lost
+
+Không được âm thầm chọn một source.
+
+Phải ghi kiểu:
+
+{
+    "field": "shipment_status",
+    "sources": ["order", "shipment"],
+    "selected_source": "shipment",
+    "resolution_code": "SHIPMENT_SOURCE_PRECEDENCE"
+}
+
+Nếu chưa resolve được:
+
+"selected_source": null
+
+==================================================
+4. VERIFIER CHECKLIST
+==================================================
+
+Verifier phải kiểm tra trước khi finalize:
+
+1. case_id đúng chưa?
+2. resolved_order_ids có trùng rejected_candidates không?
+3. affected_entities.order_ids có khớp entity_resolution không?
+4. seller_delay thì late_seller_ids có seller không?
+5. refunded thì refunded_total_brl hợp lý chưa?
+6. recommended_refund_brl có mâu thuẫn với refunded/refundable không?
+7. action_required nhưng resolution_actions có rỗng không?
+8. no_action nhưng lại recommend refund > 0 không?
+9. evidence_refs có thuộc đúng case không?
+10. confidence có nằm trong [0,1] không?
+11. root cause có phù hợp shipment/payment verdict không?
+12. data conflict có được ghi nhận đúng không?
+
+==================================================
+5. FILE KHÔNG ĐƯỢC TỰ Ý SỬA
+==================================================
+
+contracts/** = READ ONLY
+
+Không ai được tự ý sửa:
+- contracts/schemas/*
+- contracts/scoring/*
+- contracts/registry/*
+
+Lý do:
+- Đây là contract chuẩn của competition.
+- Không được sửa schema để output của mình pass.
+
+Các file starter cũng nên hạn chế sửa:
+- src/student_agent/cases.py
+- src/student_agent/contracts.py
+- src/student_agent/config.py
+- src/student_agent/submission.py
+- src/student_agent/trace.py
+- src/student_agent/mcp_gateway.py
+
+Nếu cần cache/retry, nên tạo:
+- utils/evidence.py
+- utils/cache.py
+
+thay vì sửa gateway tùy ý.
+
+==================================================
+6. CONTRACT NỘI BỘ GIỮA CÁC THÀNH VIÊN
+==================================================
+
+Tạo:
+src/student_agent/models/messages.py
+
+Gợi ý interface:
+
+@dataclass
+class EntityResult:
+    status: str
+    resolved_order_ids: list[str]
+    rejected_candidates: list[str]
+    confidence: float
+    customer_unique_id: str | None
+    related_order_ids: list[str]
+    evidence_refs: list[str]
+
+@dataclass
+class ShipmentResult:
+    verdict: str
+    late_seller_ids: list[str]
+    timeline_complete: bool
+    item_ids: list[str]
+    seller_ids: list[str]
+    shipment_ids: list[str]
+    candidate_causes: list[dict]
+    evidence_refs: list[str]
+
+@dataclass
+class PaymentResult:
+    verdict: str
+    captured_total_brl: float | None
+    refunded_total_brl: float | None
+    refundable_total_brl: float | None
+    payment_references: list[str]
+    financial_resolution: dict
+    candidate_causes: list[dict]
+    evidence_refs: list[str]
+
+Interface function đề xuất:
+
+async def resolve_entity(case, gateway, trace) -> EntityResult:
+    ...
+
+async def investigate_order_shipment(case, entity, gateway, trace) -> ShipmentResult:
+    ...
+
+async def investigate_payment(case, entity, gateway, trace) -> PaymentResult:
+    ...
+
+def verify_and_finalize(case, entity, shipment, payment) -> dict:
+    ...
+
+==================================================
+7. RÀNG BUỘC MCP CHUNG
+==================================================
+
+1. Mọi MCP call phải truyền đúng case_id.
+2. Không bao giờ tự tạo evidence_ref.
+3. Không tái sử dụng evidence giữa các case.
+4. Tool discovery trước, không đoán tool name.
+5. MCP call thừa cũng bị audit.
+6. Cache phải theo scope case_id.
+7. Retry phải giới hạn.
+8. Không gọi mọi tool chỉ để “lấy hết dữ liệu”.
+9. Chỉ gọi thêm tool khi evidence hiện tại chưa đủ.
+10. Không lưu API key vào output, trace hoặc commit.
+
+Gợi ý cache:
+
+cache[case_id][tool_name][args]
+
+==================================================
+8. TRACE RULE
+==================================================
+
+Không trace chain-of-thought.
+
+Sai:
+attributes={
+    "reasoning": "I think seller probably delayed because..."
+}
+
+Đúng:
+trace.emit(
+    event_type="verification_completed",
+    actor="verifier",
+    decision_code="SHIPMENT_TIMELINE_VERIFIED",
+    attributes={
+        "timeline_complete": True
+    }
+)
+
+Trace chỉ nên ghi:
+- ai nhận case
+- ai được giao task
+- tool nào được dùng
+- evidence nào được consume
+- ai handoff cho ai
+- verification result
+- finalize
+
+==================================================
+9. GIT WORKFLOW
+==================================================
+
+Branch đề xuất:
+
+main
+feature/entity-agent
+feature/shipment-agent
+feature/payment-agent
+feature/coordinator-verifier
+
+Quy định:
+- Không commit trực tiếp vào main.
+- Mỗi người làm trên branch riêng.
+- Pull latest main trước khi tạo PR.
+- Chạy test trước khi merge.
+- Merge qua Pull Request.
+- Shared files cần ít nhất 1 người khác review.
+
+Ownership:
+
+Person 1:
+- agents/entity_agent.py
+- tests/test_entity_agent.py
+
+Person 2:
+- agents/order_shipment_agent.py
+- tests/test_order_shipment_agent.py
+
+Person 3:
+- agents/payment_agent.py
+- tests/test_payment_agent.py
+
+Person 4:
+- workflow.py
+- agents/verifier_agent.py
+- tests/test_workflow.py
+- ARCHITECTURE.md
+
+Shared:
+- models/messages.py
+- utils/evidence.py
+
+Protected:
+- contracts/**
+- mcp_gateway.py
+- submission.py
+- trace.py
+- cases.py
+
+==================================================
+10. DEFINITION OF DONE
+==================================================
+
+Mỗi thành viên chỉ được coi là xong khi:
+
+✓ Code chạy độc lập
+✓ Có unit test
+✓ Không sửa contract
+✓ Không invent evidence
+✓ MCP call có case_id
+✓ Evidence refs được giữ lại
+✓ Có trace observable
+✓ Không ghi chain-of-thought vào trace
+✓ Không hard-code case cụ thể
+✓ Không phụ thuộc implementation nội bộ của người khác ngoài interface chung
+✓ Không commit API key
+
+==================================================
+11. ƯU TIÊN THEO SCORING
+==================================================
+
+Scoring L3B:
+
+Semantic      40%
+Evidence      15%
+Provenance    15%
+Consistency   10%
+Schema         5%
+Calibration    5%
+Workflow       5%
+Efficiency     5%
+
+Ưu tiên thực tế:
+
+1. Nghiệp vụ đúng
+2. Evidence đúng và đủ
+3. Evidence ref hợp lệ
+4. Output không tự mâu thuẫn
+5. Schema đúng
+6. Confidence hợp lý
+7. Trace multi-agent đủ
+8. MCP call hiệu quả
+
+Không cần xây quá nhiều agent.
+Workflow đơn giản nhưng chắc chắn sẽ tốt hơn workflow phức tạp nhưng gọi MCP lan man.
+
+==================================================
+12. CHỐT PHÂN CÔNG
+==================================================
+
+NGƯỜI 1
+Entity Resolution + Customer Context
+
+NGƯỜI 2
+Order/Product + Shipment Analysis
+
+NGƯỜI 3
+Payment + Refund + Financial Resolution
+
+NGƯỜI 4
+Coordinator + Conflict Resolver + Verifier + Integration
+
+Nguyên tắc cuối:
+
+contracts/      = KHÔNG ĐỤNG
+starter core    = HẠN CHẾ ĐỤNG
+agents/*        = mỗi người sở hữu file riêng
+models/messages = contract nội bộ chung
+workflow.py     = chỉ Người 4 ghép
+main            = chỉ merge qua PR
