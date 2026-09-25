@@ -59,8 +59,10 @@ ORDER_ID_IN_TEXT = re.compile(r"\b[0-9a-f]{32}\b")
 DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2})?")
 
 # A mismatch on a hard hint rejects the candidate outright.
+# The case carries the scoped customer identity as ``customer_unique_id_hint``; it is the
+# key for get_customer_history, whose authoritative order list then prunes candidates.
 HARD_HINTS: dict[str, tuple[str, ...]] = {
-    "customer_unique_id": ("customer_unique_id",),
+    "customer_unique_id": ("customer_unique_id", "customer_unique_id_hint"),
     "customer_id": ("customer_id",),
 }
 # Soft hints only add to or subtract from a candidate's score.
@@ -89,6 +91,8 @@ class EntityAgentResult(EntityResult):
     rejection_evidence_refs: list[str] = field(default_factory=list)
     # candidate order_id -> decision code, e.g. RESOLVED, NOT_FOUND, CUSTOMER_MISMATCH.
     candidate_decisions: dict[str, str] = field(default_factory=dict)
+    # raw get_customer_history envelope (order versions), reused by the verifier.
+    history_evidence: dict[str, Any] | None = None
 
 
 @dataclass(eq=False)
@@ -232,6 +236,25 @@ async def resolve_entity(
             if candidate.score < top:
                 candidate.decision = "LOWER_MATCH_SCORE"
 
+    # Every declared candidate was disproved: the authoritative customer history may still
+    # name the real order (e.g. the customer quoted a wrong order ID). Accept it only when
+    # exactly one history order checks out.
+    if not resolved and not survivors and not unassessed and history_ids and not from_history:
+        known = {c.order_id for c in pool}
+        extra = [_Candidate(i) for i in history_ids if i not in known][:MAX_ORDER_LOOKUPS]
+        found = await asyncio.gather(
+            *(session.call(TOOL_ORDER, order_id=c.order_id) for c in extra)
+        )
+        for candidate, evidence in zip(extra, found, strict=True):
+            if evidence is not None:
+                session.consumed(TOOL_ORDER, evidence)
+            _assess(candidate, evidence, hints, bonus=False)
+        rescued = [c for c in extra if c.decision is None]
+        if len(rescued) == 1:
+            rescued[0].decision = "RESOLVED"
+            resolved = rescued
+            pool.extend(rescued)
+
     status = "resolved" if resolved else ("ambiguous" if survivors or unassessed else "not_found")
     resolved_ids = [c.order_id for c in resolved]
     customer_unique_id = _customer_identity(resolved, hint_customer, history_evidence, history_ids)
@@ -264,6 +287,7 @@ async def resolve_entity(
         order_evidence={c.order_id: c.evidence for c in resolved if c.evidence is not None},
         rejection_evidence_refs=rejection_refs,
         candidate_decisions={c.order_id: c.decision or "UNRESOLVED" for c in pool},
+        history_evidence=history_evidence,
     )
     trace.emit(
         case_id=case_id,

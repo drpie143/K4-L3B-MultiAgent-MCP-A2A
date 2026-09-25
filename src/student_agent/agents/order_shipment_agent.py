@@ -50,6 +50,8 @@ class OrderShipmentResult(ShipmentResult):
     order_status: str | None = None
     shipment_status: str | None = None
     conflicts: list[dict[str, Any]] = field(default_factory=list)
+    # tool name -> MCP ``data`` already fetched, for the verifier's evidence checks.
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -86,9 +88,7 @@ class _Session:
         if self.allows(tool_name):
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
-                    evidence = await self.gateway.call(
-                        tool_name, case_id=self.case_id, **arguments
-                    )
+                    evidence = await self.gateway.call(tool_name, case_id=self.case_id, **arguments)
                     break
                 except (RuntimeError, ValueError):
                     break
@@ -151,9 +151,7 @@ def _analyze(
         [row.get("item_id") or row.get("order_item_id") or row.get("product_id") for row in items]
     )
     seller_ids = unique_ids([row.get("seller_id") for row in items])
-    shipment_ids = unique_ids(
-        [node.get("shipment_id") for node in walk_dicts(shipment_data)]
-    )
+    shipment_ids = unique_ids([node.get("shipment_id") for node in walk_dicts(shipment_data)])
     order_status = first_text(order_data, ("order_status",))
     shipment_status = first_text(shipment_data, ("shipment_status", "status"))
     flags = _status_flags(shipment_data)
@@ -391,6 +389,7 @@ async def investigate_order_shipment(
 
     views: list[_OrderView] = []
     refs: list[str] = []
+    raw: dict[str, Any] = {}
     for order_id in entity.resolved_order_ids:
         order_payload = cached_orders.get(order_id)
         if not isinstance(order_payload, dict):
@@ -418,6 +417,13 @@ async def investigate_order_shipment(
                 ref = evidence_ref_of(product_payload)
                 if ref:
                     refs.append(ref)
+        raw.setdefault(
+            ITEM_TOOL, item_payload.get("data") if isinstance(item_payload, dict) else None
+        )
+        raw.setdefault(
+            SHIPMENT_TOOL,
+            shipment_payload.get("data") if isinstance(shipment_payload, dict) else None,
+        )
         views.append(
             _analyze(
                 order_data,
@@ -443,6 +449,7 @@ async def investigate_order_shipment(
         order_status=view.order_status,
         shipment_status=view.shipment_status,
         conflicts=view.conflicts,
+        raw=raw,
     )
     _handoff(trace, case_id, result)
     return result

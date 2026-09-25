@@ -16,6 +16,10 @@ from .agents.verifier_agent import verify_and_finalize
 from .mcp_gateway import EvidenceGateway
 from .models.messages import FinancialResolution, PaymentResult, ShipmentResult
 from .trace import TraceWriter
+from .utils.evidence import evidence_ref_of, valid_evidence_refs
+from .utils.evidence_store import StoredGateway, store_root
+
+POLICY_TOOL = "get_policy"
 
 
 async def _tools(gateway: EvidenceGateway) -> set[str] | None:
@@ -62,11 +66,42 @@ async def _payment(
         )
 
 
+async def _policy(
+    case: dict[str, Any], gateway: EvidenceGateway, trace: TraceWriter, tools: set[str] | None
+) -> dict[str, Any] | None:
+    """Fetch the case's policy version once; the verifier's rules follow that policy."""
+    case_id = str(case.get("case_id") or "")
+    version = case.get("policy_version")
+    if not isinstance(version, str) or not version:
+        return None
+    if tools is not None and POLICY_TOOL not in tools:
+        return None
+    try:
+        payload = await gateway.call(POLICY_TOOL, case_id=case_id, policy_version=version)
+    except Exception:
+        return None
+    ref = evidence_ref_of(payload)
+    if ref is None:
+        return None
+    trace.emit(
+        case_id=case_id,
+        event_type="tool_result_consumed",
+        actor="coordinator",
+        tool_name=POLICY_TOOL,
+        evidence_refs=[ref],
+        attributes={"domain": payload.get("domain"), "policy_version": version},
+    )
+    return payload
+
+
 async def solve_case(
     case: dict[str, Any], gateway: EvidenceGateway, trace: TraceWriter
 ) -> dict[str, Any]:
     """Resolve the order, investigate shipment and payment, then verify the output."""
     case_id = str(case.get("case_id") or "")
+    root = store_root()
+    if root is not None and isinstance(gateway, EvidenceGateway):
+        gateway = StoredGateway(gateway, root)  # type: ignore[assignment]
     discovered = await _tools(gateway)
     entity = await resolve_entity(
         case,
@@ -87,6 +122,7 @@ async def solve_case(
             _shipment(case, entity, gateway, trace),
             _payment(case, entity, gateway, trace),
         )
+    policy = await _policy(case, gateway, trace, discovered)
 
     trace.emit(
         case_id=case_id,
@@ -96,7 +132,21 @@ async def solve_case(
         decision_code="READY_FOR_VERIFICATION",
         attributes={"entity_status": entity.status},
     )
-    output = verify_and_finalize(case, entity, shipment, payment)
+    policy_data = policy.get("data") if isinstance(policy, dict) else None
+    output = verify_and_finalize(
+        case, entity, shipment, payment, policy_data if isinstance(policy_data, dict) else None
+    )
+    policy_ref = evidence_ref_of(policy)
+    if policy_ref is not None:
+        output["evidence_refs"] = valid_evidence_refs([*output["evidence_refs"], policy_ref])
+        trace.emit(
+            case_id=case_id,
+            event_type="policy_decided",
+            actor="coordinator",
+            decision_code=f"POLICY_{output['assessment']['case_status'].upper()}",
+            evidence_refs=[policy_ref],
+            attributes={"policy_version": str(case.get("policy_version"))},
+        )
     assessment = output["assessment"]
     trace.emit(
         case_id=case_id,

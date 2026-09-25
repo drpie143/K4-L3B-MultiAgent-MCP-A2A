@@ -356,3 +356,54 @@ def test_case_parsing_helpers() -> None:
     assert find_order_record({"order_id": ORDER_B}, ORDER_A) is None
     assert find_order_record({"found": False}, ORDER_A) is None
     assert find_order_record(None, ORDER_A) is None
+
+
+def test_case_level_customer_hint_prunes_fake_candidate_without_order_lookup(
+    trace: TraceWriter,
+) -> None:
+    hint = "customer-5358baaa785d"
+    gateway = FakeGateway(
+        {
+            ("get_customer_history", hint): history_ev(hint, [ORDER_A, ORDER_A]),
+            ("get_order", ORDER_A): evidence(
+                "order", {"order_id": ORDER_A, "customer_id": "customer-row-x"}, "row"
+            ),
+        }
+    )
+    case = {
+        "case_id": CASE_ID,
+        "customer_request": {"claimed_order_id": ORDER_A},
+        "candidate_order_ids": [ORDER_A, "candidate-004"],
+        "customer_unique_id_hint": hint,
+    }
+    result = run(case, gateway, trace)
+
+    assert result.status == "resolved"
+    assert result.resolved_order_ids == [ORDER_A]
+    assert result.rejected_candidates == ["candidate-004"]
+    assert result.customer_unique_id == hint
+    assert result.related_order_ids == []
+    assert gateway.tools_called("get_order") == [ORDER_A]
+
+
+def test_wrong_claimed_order_is_recovered_from_customer_history(trace: TraceWriter) -> None:
+    hint = "customer-000000000001"
+    gateway = FakeGateway(
+        {
+            ("get_customer_history", hint): history_ev(hint, [ORDER_B]),
+            ("get_order", ORDER_B): evidence("order", {"order_id": ORDER_B}, "real-order"),
+        }
+    )
+    case = {
+        "case_id": CASE_ID,
+        "customer_request": {"claimed_order_id": ORDER_A},
+        "candidate_order_ids": [ORDER_A, "candidate-001"],
+        "customer_unique_id_hint": hint,
+    }
+    result = run(case, gateway, trace)
+
+    assert result.status == "resolved"
+    assert result.resolved_order_ids == [ORDER_B]
+    assert set(result.rejected_candidates) == {ORDER_A, "candidate-001"}
+    assert gateway.tools_called("get_order") == [ORDER_B]
+    assert evidence("order", {}, "real-order")["evidence_ref"] in result.evidence_refs

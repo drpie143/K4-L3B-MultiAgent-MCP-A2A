@@ -6,6 +6,7 @@ causes. A captured amount is never treated as a refund by itself.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..cases import CASE_ID_PATTERN
@@ -20,6 +21,14 @@ from ..models.messages import (
 )
 from ..trace import TraceWriter
 from ..utils.evidence import as_float, evidence_ref_of, walk_dicts
+
+
+@dataclass
+class PaymentAgentResult(PaymentResult):
+    """PaymentResult plus the MCP data already fetched, for the verifier's checks."""
+
+    raw: dict[str, Any] = field(default_factory=dict)
+
 
 ACTOR = "payment-agent"
 COORDINATOR = "coordinator"
@@ -64,9 +73,7 @@ def _payment_rows(data: Any) -> list[dict[str, Any]]:
         if "payment_value" not in node or "refund_amount" in node or "refund_status" in node:
             continue
         identity = (
-            node.get("payment_id")
-            or node.get("payment_reference")
-            or node.get("transaction_id")
+            node.get("payment_id") or node.get("payment_reference") or node.get("transaction_id")
         )
         if identity is not None:
             key = str(identity)
@@ -136,9 +143,7 @@ def _duplicate_amount(rows: list[dict[str, Any]], payload: Any) -> float:
     amount = 0.0
     explicit = False
     for node in walk_dicts(payload):
-        label = " ".join(
-            str(node.get(key, "")) for key in ("event_type", "type", "status")
-        ).lower()
+        label = " ".join(str(node.get(key, "")) for key in ("event_type", "type", "status")).lower()
         if node.get("is_duplicate") or "duplicate" in label:
             explicit = True
             flagged = as_float(node.get("payment_value"))
@@ -252,11 +257,13 @@ async def investigate_payment(
     refund_rows: list[dict[str, Any]] = []
     evidence_refs: list[str] = []
     raw_payloads: list[Any] = []
+    raw: dict[str, Any] = {}
     for order_id in entity.resolved_order_ids:
         if payment_tool:
             payload = await _call(gateway, payment_tool, case_id, order_id)
             if payload is not None:
                 raw_payloads.append(payload.get("data"))
+                raw.setdefault("payments", payload.get("data"))
                 ref = _emit_consumed(trace, case_id, payment_tool, payload)
                 if ref:
                     evidence_refs.append(ref)
@@ -273,6 +280,7 @@ async def investigate_payment(
         if refund_tool:
             payload = await _call(gateway, refund_tool, case_id, order_id)
             if payload is not None:
+                raw.setdefault("refunds", payload.get("data"))
                 ref = _emit_consumed(trace, case_id, refund_tool, payload)
                 if ref:
                     evidence_refs.append(ref)
@@ -287,11 +295,12 @@ async def investigate_payment(
             decision_code="PAYMENT_INSUFFICIENT_EVIDENCE",
             attributes={"status": "no_payment_data"},
         )
-        return PaymentResult(
+        return PaymentAgentResult(
             verdict="insufficient_evidence",
             candidate_causes=[CandidateCause("INSUFFICIENT_EVIDENCE", "unknown", rank=1)],
             financial_resolution=FinancialResolution(),
             evidence_refs=evidence_refs,
+            raw=raw,
         )
 
     captured_rows: list[dict[str, Any]] = []
@@ -359,7 +368,7 @@ async def investigate_payment(
             "recommended_refund_brl": round(recommended, 2),
         },
     )
-    return PaymentResult(
+    return PaymentAgentResult(
         verdict=verdict,
         captured_total_brl=round(captured_total, 2),
         refunded_total_brl=round(refunded_total, 2),
@@ -370,4 +379,5 @@ async def investigate_payment(
         ),
         candidate_causes=causes,
         evidence_refs=list(dict.fromkeys(evidence_refs)),
+        raw=raw,
     )

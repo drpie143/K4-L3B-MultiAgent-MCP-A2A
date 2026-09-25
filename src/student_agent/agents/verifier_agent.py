@@ -11,7 +11,8 @@ from typing import Any
 
 from .. import OUTPUT_SCHEMA_VERSION
 from ..models.messages import EntityResult, PaymentResult, ShipmentResult
-from ..utils.evidence import first_text, round_money, unique_ids, valid_evidence_refs
+from ..utils.evidence import as_float, first_text, round_money, unique_ids, valid_evidence_refs
+from .case_signals import MONEY_EPS, STRONG, analyze, choose_primary
 
 PRIORITY = (
     "duplicate_charge",
@@ -413,8 +414,186 @@ def verify_and_finalize(
     entity: EntityResult,
     shipment: ShipmentResult,
     payment: PaymentResult,
+    policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Check cross-field invariants and return the L3B case output."""
+    """Check cross-field invariants and return the L3B case output.
+
+    With the case's policy (``get_policy`` data) and a resolved order, the decision comes
+    from evidence signals checked against the complaint timeline, and the refund, status,
+    action and responsible parties come from the matching policy rule.
+    """
+    output = _rule_based_output(case, entity, shipment, payment)
+    if policy is not None:
+        output = _apply_policy(output, case, entity, shipment, payment, policy)
+    return output
+
+
+PAYMENT_VERDICT_BY_ISSUE = {
+    "duplicate_charge": "duplicate_capture",
+    "payment_mismatch": "capture_mismatch",
+    "refund_failed": "refund_failed",
+    "refund_pending": "refund_pending",
+}
+DELIVERY_ISSUES = {"late_delivery_seller", "late_delivery_logistics"}
+
+
+def _apply_policy(
+    output: dict[str, Any],
+    case: dict[str, Any],
+    entity: EntityResult,
+    shipment: ShipmentResult,
+    payment: PaymentResult,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    rules = policy.get("rules") if isinstance(policy, dict) else None
+    resolved = output["entity_resolution"]["resolved_order_ids"]
+    if not isinstance(rules, dict) or output["entity_resolution"]["status"] != "resolved":
+        return output
+    order_id = resolved[0]
+    order_payload = (getattr(entity, "order_evidence", {}) or {}).get(order_id) or {}
+    history_payload = getattr(entity, "history_evidence", None) or {}
+    ship_raw = getattr(shipment, "raw", {}) or {}
+    pay_raw = getattr(payment, "raw", {}) or {}
+    signals = analyze(
+        case,
+        order_id,
+        order=order_payload.get("data"),
+        history=history_payload.get("data"),
+        items=ship_raw.get("get_order_items"),
+        shipment=ship_raw.get("get_shipment_summary"),
+        payments=pay_raw.get("payments"),
+        refunds=pay_raw.get("refunds"),
+    )
+    request = case.get("customer_request")
+    claims = request.get("claims") if isinstance(request, dict) else None
+    topics = [str(c.get("topic")) for c in claims or [] if isinstance(c, dict) and c.get("topic")]
+    primary, confidence = choose_primary(topics, signals.detected)
+    rule = rules.get(primary)
+    if not isinstance(rule, dict):
+        return output
+
+    case_status = str(rule.get("case_status") or output["assessment"]["case_status"])
+    if case_status not in {"action_required", "no_action", "needs_investigation"}:
+        case_status = output["assessment"]["case_status"]
+    refund = round_money(as_float(rule.get("refund_brl"))) or 0.0
+    action = rule.get("recommended_action")
+    actions = [str(action)[:80]] if isinstance(action, str) and action else []
+    if case_status == "action_required" and not actions:
+        actions = [OPERATIONAL_ACTIONS.get(primary, "review_case")]
+    if case_status == "no_action":
+        refund = 0.0
+
+    # Shipment: follow evidence; a delivery primary issue must name its verdict.
+    ship_verdict = signals.shipment_verdict
+    late = list(signals.late_seller_ids)
+    if primary == "late_delivery_seller":
+        ship_verdict = "seller_delay"
+        late = late or signals.seller_ids[:1]
+    elif primary == "late_delivery_logistics" and ship_verdict not in {"lost", "returned"}:
+        ship_verdict = "logistics_delay"
+    if ship_verdict != "seller_delay":
+        late = []
+    if ship_verdict == "seller_delay" and not late:
+        ship_verdict = "insufficient_evidence"
+
+    captured = signals.captured_total
+    refunded = signals.refunded_total
+    refundable = None if captured is None else round(max(0.0, captured - (refunded or 0.0)), 2)
+    pay_verdict = PAYMENT_VERDICT_BY_ISSUE.get(primary)
+    if pay_verdict is None:
+        if captured is None:
+            pay_verdict = "insufficient_evidence"
+        elif (refunded or 0) > 0 and (refundable or 0) < MONEY_EPS:
+            pay_verdict = "refunded"
+        else:
+            pay_verdict = "reconciled"
+
+    parties: list[dict[str, Any]] = []
+    for party in rule.get("responsible_parties") or []:
+        if not isinstance(party, dict):
+            continue
+        party_type = party.get("party_type") if party.get("party_type") in PARTIES else "unknown"
+        party_id = party.get("party_id")
+        if party_type == "seller":
+            party_id = (late or signals.seller_ids or [party_id])[0]
+        entry = {"party_type": party_type, "party_id": party_id}
+        if entry not in parties:
+            parties.append(entry)
+    cause = PRIMARY_CAUSES.get(primary, ("INSUFFICIENT_EVIDENCE", "unknown"))
+    if not parties:
+        parties = [{"party_type": cause[1], "party_id": late[0] if late else None}]
+
+    secondary = [i for i in PRIORITY if i in signals.detected and i != primary and i in STRONG]
+    conflicts: list[dict[str, Any]] = []
+    if signals.status_conflict is not None:
+        selected, other = signals.status_conflict
+        conflicts.append(
+            {
+                "field": "order_status",
+                "sources": [other, selected],
+                "selected_source": selected,
+                "resolution_code": "COMPLAINT_TIMELINE_PRECEDENCE",
+            }
+        )
+
+    output["assessment"] = {
+        "primary_issue": primary,
+        "secondary_issues": secondary[:10],
+        "case_status": case_status,
+        "confidence": _clamp_unit(confidence if entity.confidence >= 0.7 else 0.5, 0.5),
+    }
+    output["affected_entities"]["seller_ids"] = unique_ids(
+        [*signals.seller_ids, *late, *output["affected_entities"]["seller_ids"]]
+    )
+    output["shipment_analysis"] = {
+        "verdict": ship_verdict,
+        "late_seller_ids": late,
+        "timeline_complete": bool(
+            signals.timeline_complete and ship_verdict != "insufficient_evidence"
+        ),
+    }
+    output["payment_analysis"] = {
+        "verdict": pay_verdict,
+        "captured_total_brl": captured,
+        "refunded_total_brl": refunded,
+        "refundable_total_brl": refundable,
+    }
+    if refundable is not None:
+        refund = min(refund, refundable) if refundable > 0 else refund
+    output["financial_resolution"] = {
+        "currency": "BRL",
+        "recommended_refund_brl": refund,
+        "refund_lines": (
+            [{"reason_code": primary.upper(), "amount_brl": refund, "entity_id": order_id}]
+            if refund > 0
+            else []
+        ),
+    }
+    output["root_cause_analysis"] = {
+        "ranked_causes": [{"cause_code": cause[0], "rank": 1}],
+        "responsible_parties": parties[:5],
+    }
+    output["data_conflicts"] = conflicts
+    output["resolution_actions"] = actions[:8]
+    claims_out = _claims(
+        case,
+        primary,
+        refund,
+        refundable,
+        output["assessment"]["confidence"],
+        output["evidence_refs"],
+    )
+    if claims_out:
+        output["claim_assessments"] = claims_out
+    return output
+
+
+def _rule_based_output(
+    case: dict[str, Any],
+    entity: EntityResult,
+    shipment: ShipmentResult,
+    payment: PaymentResult,
+) -> dict[str, Any]:
     resolved = unique_ids(list(entity.resolved_order_ids))
     rejected = [
         item for item in unique_ids(list(entity.rejected_candidates)) if item not in set(resolved)

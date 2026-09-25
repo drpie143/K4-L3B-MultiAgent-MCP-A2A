@@ -18,6 +18,7 @@ venv/
 htmlcov/
 
 # Competition runtime artifacts
+.mcp_store/
 case-set.json
 inputs/*
 !inputs/.gitkeep
