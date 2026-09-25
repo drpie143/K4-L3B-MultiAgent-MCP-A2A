@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L3B Case Workflow</title>
+<style>
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+  --text: #1c2430; --muted: #5f6b7a; --faint: #8a95a3;
+  --accent: #3d5afe; --accent-soft: #e8ecff;
+  --ok: #1f8a4c; --ok-soft: #e3f4ea; --warn: #b26a00; --warn-soft: #fff3dc;
+  --bad: #c62828; --bad-soft: #fde8e8; --idle: #8a95a3; --idle-soft: #eef0f3;
+  --p1: #00897b; --p2: #7b1fa2; --p3: #c77700; --p4: #1e63c7; --pc: #546e7a;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px; --shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #171c23; --surface-2: #1e252e; --border: #2b333e;
+    --text: #e6ebf1; --muted: #9aa6b4; --faint: #6d7886;
+    --accent: #7c8cff; --accent-soft: #232a4d;
+    --ok: #4cc27f; --ok-soft: #173325; --warn: #f0b451; --warn-soft: #3a2c12;
+    --bad: #ff6b6b; --bad-soft: #3d1b1b; --idle: #7a8593; --idle-soft: #232a33;
+    --p1: #4db6ac; --p2: #ba68c8; --p3: #ffb74d; --p4: #64a0f0; --pc: #90a4ae;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #171c23; --surface-2: #1e252e; --border: #2b333e;
+  --text: #e6ebf1; --muted: #9aa6b4; --faint: #6d7886;
+  --accent: #7c8cff; --accent-soft: #232a4d;
+  --ok: #4cc27f; --ok-soft: #173325; --warn: #f0b451; --warn-soft: #3a2c12;
+  --bad: #ff6b6b; --bad-soft: #3d1b1b; --idle: #7a8593; --idle-soft: #232a33;
+  --p1: #4db6ac; --p2: #ba68c8; --p3: #ffb74d; --p4: #64a0f0; --pc: #90a4ae;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, input, select { font: inherit; color: inherit; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* header */
+header {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px;
+  padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+.stats { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.spacer { flex: 1; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+.btn {
+  border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px;
+  padding: 5px 10px; cursor: pointer; font-size: 13px;
+}
+.btn:hover { border-color: var(--accent); }
+
+/* layout */
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: calc(100vh - 53px); }
+aside { border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 0;
+  position: sticky; top: 53px; height: calc(100vh - 53px); align-self: start; }
+.filters { padding: 12px; display: grid; gap: 8px; border-bottom: 1px solid var(--border); }
+.filters input, .filters select {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.case-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; min-height: 0; }
+.case-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+}
+.case-item:hover { background: var(--surface-2); }
+.case-item[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.case-item .id { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.case-item .topic { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.case-item .grow { flex: 1; min-width: 0; }
+.list-empty { padding: 16px; color: var(--muted); }
+main { padding: 20px; display: grid; gap: 16px; align-content: start; min-width: 0; }
+
+/* cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
+.card > .hd { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.card > .hd h2, .card > .hd h3 { margin: 0; font-size: 14px; }
+.card > .bd { padding: 14px 16px; }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+/* chips, pills */
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.chip.muted { color: var(--faint); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.s-done { background: var(--ok-soft); color: var(--ok); }
+.s-warn { background: var(--warn-soft); color: var(--warn); }
+.s-fail { background: var(--bad-soft); color: var(--bad); }
+.s-waiting, .s-skipped, .s-na { background: var(--idle-soft); color: var(--idle); }
+.owner { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; color: #fff; white-space: nowrap; }
+.o-p1 { background: var(--p1); } .o-p2 { background: var(--p2); } .o-p3 { background: var(--p3); } .o-p4 { background: var(--p4); } .o-pc { background: var(--pc); }
+.demo-banner { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 600; }
+
+/* case header */
+.case-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; }
+.case-head h2 { margin: 0; font-family: var(--mono); font-size: 20px; }
+.meta { color: var(--muted); font-size: 13px; }
+.message { margin: 12px 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 8px 8px 0; }
+.kv { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* pipeline */
+.pipeline { display: flex; align-items: stretch; gap: 0; }
+.node {
+  flex: 1 1 0; min-width: 0; text-align: left; cursor: pointer; background: var(--surface);
+  border: 1px solid var(--border); border-top: 4px solid var(--idle); border-radius: 8px; padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.node:hover { border-color: var(--accent); }
+.node[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.node.st-done { border-top-color: var(--ok); } .node.st-warn { border-top-color: var(--warn); }
+.node.st-fail { border-top-color: var(--bad); } .node.st-skipped { border-top-style: dashed; opacity: .75; }
+.node .t { font-weight: 600; font-size: 13px; line-height: 1.25; }
+.node .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.node .n { color: var(--faint); font-size: 11.5px; }
+.arrow { flex: 0 0 22px; display: flex; align-items: center; justify-content: center; color: var(--faint); }
+.parallel { flex: 1.1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 18px 8px 8px; border: 1px dashed var(--border); border-radius: 10px; position: relative; }
+.parallel::before { content: "song song · asyncio.gather"; position: absolute; top: 2px; left: 10px; font-size: 10.5px; color: var(--faint); }
+.parallel .node { flex: 1 1 auto; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--muted); }
+
+/* stage detail */
+.stage-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.stage-detail h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.stage-detail ul { margin: 0; padding-left: 18px; }
+.stage-detail li { margin: 2px 0; }
+
+/* result cards */
+.empty { color: var(--muted); font-size: 13px; display: grid; gap: 8px; }
+.empty .file { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.big { font-size: 18px; font-weight: 700; }
+.num { font-variant-numeric: tabular-nums; font-family: var(--mono); }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.table-wrap { overflow-x: auto; }
+.checks li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-bottom: 1px solid var(--border); list-style: none; }
+.checks { margin: 0; padding: 0; }
+.checks li:last-child { border-bottom: 0; }
+.checks .lbl { flex: 1; min-width: 0; }
+.checks .det { color: var(--muted); font-size: 12px; }
+pre.json { margin: 0; max-height: 420px; overflow: auto; font: 12px/1.45 var(--mono); background: var(--surface-2); padding: 12px; border-radius: 8px; }
+details > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; }
+details[open] > summary { border-bottom: 1px solid var(--border); }
+.placeholder { padding: 40px; text-align: center; color: var(--muted); }
+
+/* view tabs */
+.tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; justify-self: start; }
+.tab { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); outline: 1px solid var(--border); }
+
+/* conversation view */
+.chat-card > .hd { flex-wrap: wrap; }
+.chat { display: flex; flex-direction: column; gap: 14px; max-width: 880px; }
+.msg { display: flex; gap: 10px; align-items: flex-start; }
+.avatar {
+  flex: 0 0 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  color: #fff; font-weight: 700; font-size: 13px;
+}
+.av-customer { background: var(--accent); }
+.bubble { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 4px 12px 12px 12px; padding: 9px 12px; }
+.bubble .who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 3px; }
+.bubble .who b { font-weight: 600; }
+.bubble .who .to { color: var(--muted); }
+.bubble .who .time { margin-left: auto; color: var(--faint); font: 11px var(--mono); }
+.bubble p { margin: 2px 0; }
+.bubble .facts { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 3px 10px; margin-top: 6px; font-size: 12.5px; }
+.bubble .facts dt { color: var(--muted); }
+.bubble .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.msg.customer .bubble { background: var(--accent-soft); border-color: transparent; }
+.msg.final .bubble { border: 1px solid var(--ok); background: var(--ok-soft); }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.divider { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.chat-note { color: var(--muted); font-size: 13px; padding: 8px 0 0 44px; }
+.typing { color: var(--faint); font-size: 12px; padding-left: 44px; }
+
+@media (max-width: 1100px) {
+  .grid-2, .stage-detail { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  header { flex-wrap: wrap; padding: 10px 16px; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  aside { border-right: 0; border-bottom: 1px solid var(--border); position: static; height: auto; }
+  .case-list { max-height: 36vh; }
+  main { padding: 16px; }
+  .pipeline { flex-direction: column; }
+  .arrow { flex-basis: 20px; transform: rotate(90deg); }
+  .kv { grid-template-columns: minmax(0, 1fr); }
+  .kv dt { margin-top: 6px; }
+  .bubble .facts { grid-template-columns: minmax(0, 1fr); }
+  .chat-note, .typing { padding-left: 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>L3B · Case Workflow</h1>
+  <div class="stats" id="stats"></div>
+  <div class="spacer"></div>
+  <label class="toggle"><input type="checkbox" id="demo"> Dữ liệu mẫu</label>
+  <label class="toggle"><input type="checkbox" id="live"> Tự làm mới 3s</label>
+  <button class="btn" id="refresh" type="button">Làm mới</button>
+</header>
+<div class="layout">
+  <aside>
+    <div class="filters">
+      <input id="search" type="search" placeholder="Tìm case ID, topic, order ID…" aria-label="Tìm case">
+      <select id="topic" aria-label="Lọc theo topic"><option value="">Tất cả topic</option></select>
+      <select id="state" aria-label="Lọc theo trạng thái">
+        <option value="">Tất cả trạng thái</option>
+        <option value="done">Đã có output</option>
+        <option value="pending">Chưa chạy</option>
+      </select>
+    </div>
+    <ul class="case-list" id="cases" aria-label="Danh sách case"></ul>
+  </aside>
+  <main id="main"><div class="placeholder">Đang tải…</div></main>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- static knowledge of the team plan ---------- */
+const OWNERS = {
+  p1: "Người 1", p2: "Người 2", p3: "Người 3", p4: "Người 4", pc: "Starter CLI",
+};
+const SHIPMENT_VERDICTS = ["on_time", "seller_delay", "logistics_delay", "lost", "returned", "conflicting", "insufficient_evidence"];
+const PAYMENT_VERDICTS = ["reconciled", "capture_mismatch", "duplicate_capture", "refund_pending", "refund_failed", "refunded", "insufficient_evidence"];
+const ENTITY_STATUSES = ["resolved", "ambiguous", "not_found"];
+
+// Actor names are matched against trace events. Add aliases here once agents are merged.
+const STAGES = [
+  {
+    id: "case", title: "Case input", owner: "pc", file: "cli.py",
+    match: e => e.event_type === "case_received",
+    tasks: ["Nạp inputs/<case_id>.json", "Emit case_received"],
+    tools: [], fields: [],
+  },
+  {
+    id: "entity", title: "Entity Resolver", owner: "p1", file: "agents/entity_agent.py",
+    actors: ["entity-agent"],
+    tasks: ["Xử lý candidate order, không chọn mặc định candidate đầu", "Resolve order bằng MCP evidence", "Xác định customer_unique_id + customer history", "ambiguous / not_found khi thiếu evidence"],
+    tools: ["get_order", "get_customer_history"],
+    fields: ["entity_resolution", "customer_context", "affected_entities.order_ids"],
+  },
+  {
+    id: "coordinator", title: "Coordinator", owner: "p4", file: "workflow.py",
+    actors: ["coordinator"], exclude: ["case_received", "case_finalized"],
+    tasks: ["Gọi Entity Agent trước", "Entity unresolved → fallback insufficient_evidence", "Resolved → gọi song song 2 specialist"],
+    tools: ["get_policy"], fields: [],
+  },
+  {
+    id: "shipment", title: "Order + Shipment", owner: "p2", file: "agents/order_shipment_agent.py",
+    actors: ["order-shipment-agent", "shipment-agent", "order-agent"], parallel: true,
+    tasks: ["Order status, item, seller, product", "Timeline: expected / actual delivery, seller handoff", "Carrier/logistics, lost/returned", "Trả candidate causes (không finalize root cause)"],
+    tools: ["get_order_items", "get_shipment_summary", "get_sellers", "get_product_context"],
+    fields: ["shipment_analysis", "affected_entities.item_ids", "affected_entities.seller_ids", "affected_entities.shipment_ids"],
+  },
+  {
+    id: "payment", title: "Payment + Refund", owner: "p3", file: "agents/payment_agent.py",
+    actors: ["payment-agent", "refund-agent", "payment-refund-agent"], parallel: true,
+    tasks: ["Captures, split payment, duplicate charge", "Refund pending / failed / completed", "Refundable amount, tránh double-count", "financial_resolution dựa trên evidence"],
+    tools: ["get_order_payments", "get_payment_timeline", "get_refund_timeline"],
+    fields: ["payment_analysis", "financial_resolution", "affected_entities.payment_references"],
+  },
+  {
+    id: "conflict", title: "Conflict Resolver", owner: "p4", file: "workflow.py",
+    actors: ["conflict-resolver"],
+    tasks: ["Phát hiện nguồn mâu thuẫn (order vs shipment…)", "Ghi data_conflicts, không âm thầm chọn source", "selected_source = null nếu chưa resolve"],
+    tools: [], fields: ["data_conflicts"],
+  },
+  {
+    id: "verifier", title: "Verifier", owner: "p4", file: "agents/verifier_agent.py",
+    actors: ["verifier"],
+    tasks: ["Chạy 12 kiểm tra trước finalize", "Emit verification_completed"],
+    tools: [], fields: [],
+  },
+  {
+    id: "output", title: "Final output", owner: "p4", file: "workflow.py",
+    match: e => e.event_type === "case_finalized",
+    tasks: ["Ghép output đúng l3b-output-v2", "Emit case_finalized"],
+    tools: [],
+    fields: ["assessment", "root_cause_analysis", "resolution_actions", "evidence_refs"],
+  },
+];
+const STATUS_TEXT = { done: "Xong", warn: "Cần xem", fail: "Lỗi", waiting: "Chờ logic", skipped: "Bỏ qua", na: "—", manual: "Verifier" };
+
+/* ---------- tiny DOM helpers (no innerHTML with data) ---------- */
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child == null || child === false) continue;
+    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return el;
+}
+// Replace children, skipping null/false like h() does.
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));
+const pill = status => h("span", { class: `pill s-${status}` }, STATUS_TEXT[status] || status);
+const owner = key => h("span", { class: `owner o-${key}` }, OWNERS[key]);
+const mono = text => h("code", {}, text);
+const fmtBRL = v => v == null ? "null" : Number(v).toLocaleString("vi-VN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " BRL";
+const get = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+
+const store = {
+  get(key, fallback) { try { const v = localStorage.getItem("l3b-ui:" + key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
+  set(key, value) { try { localStorage.setItem("l3b-ui:" + key, JSON.stringify(value)); } catch { /* storage unavailable */ } },
+};
+
+/* ---------- state ---------- */
+const state = {
+  summary: null, caseId: store.get("case", null), detail: null,
+  stage: store.get("stage", "entity"), demo: store.get("demo", false), live: store.get("live", false),
+  view: store.get("view", "chat"), play: null,
+};
+let liveTimer = null;
+
+async function fetchJSON(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  return res.json();
+}
+
+/* ---------- demo data (in-memory only, never written to outputs/) ---------- */
+function demoData(input) {
+  const req = input.customer_request || {};
+  const topics = (req.claims || []).map(c => c.topic).filter(t => t !== "requested_full_refund");
+  const topic = topics[0] || "unsupported_claim";
+  const claimed = req.claimed_order_id;
+  const candidates = input.candidate_order_ids || [];
+  const ref = name => `ev_DEMO_${input.case_id}_${name}`.slice(0, 99);
+  const shipVerdict = { late_delivery_seller: "seller_delay", late_delivery_logistics: "logistics_delay" }[topic] || "on_time";
+  const payVerdict = { duplicate_charge: "duplicate_capture", refund_pending: "refund_pending", refund_failed: "refund_failed", payment_mismatch: "capture_mismatch" }[topic] || "reconciled";
+  const refund = ["canceled_order_paid", "unavailable_order_paid", "duplicate_charge", "refund_failed", "late_delivery_seller"].includes(topic) ? 120 : 0;
+  const refs = ["order", "history", "items", "shipment", "payments", "refunds", "policy"].map(ref);
+  const output = {
+    schema_version: "day09-l3b-output-v2", case_id: input.case_id,
+    assessment: { primary_issue: topic, secondary_issues: [], case_status: refund > 0 ? "action_required" : "no_action", confidence: 0.8 },
+    affected_entities: { order_ids: [claimed], item_ids: ["1"], seller_ids: ["seller-demo"], payment_references: [`${claimed}:1`], shipment_ids: [] },
+    entity_resolution: { status: "resolved", resolved_order_ids: [claimed], rejected_candidates: candidates.filter(c => c !== claimed), confidence: 0.9 },
+    customer_context: { customer_unique_id: input.customer_unique_id_hint || null, related_order_ids: [] },
+    shipment_analysis: { verdict: shipVerdict, late_seller_ids: shipVerdict === "seller_delay" ? ["seller-demo"] : [], timeline_complete: true },
+    payment_analysis: { verdict: payVerdict, captured_total_brl: 240, refunded_total_brl: 0, refundable_total_brl: 240 },
+    root_cause_analysis: { ranked_causes: [{ cause_code: topic.toUpperCase(), rank: 1 }], responsible_parties: [{ party_type: shipVerdict === "seller_delay" ? "seller" : "platform", party_id: shipVerdict === "seller_delay" ? "seller-demo" : null }] },
+    evidence_refs: refs,
+    data_conflicts: topic === "late_delivery_logistics" ? [{ field: "delivery_date", sources: ["order", "shipment"], selected_source: "shipment", resolution_code: "SHIPMENT_SOURCE_PRECEDENCE" }] : [],
+    financial_resolution: { currency: "BRL", recommended_refund_brl: refund, refund_lines: refund ? [{ reason_code: topic.toUpperCase(), amount_brl: refund, entity_id: claimed }] : [] },
+    resolution_actions: refund ? ["issue_refund"] : [],
+  };
+  const t0 = Date.parse("2026-01-01T00:00:00Z");
+  let i = 0;
+  const ev = (event_type, actor, extra = {}) => ({ event_id: `evt_demo_${i}`, case_id: input.case_id, event_type, actor, occurred_at: new Date(t0 + 137 * i++).toISOString(), ...extra });
+  const trace = [
+    ev("case_received", "coordinator"),
+    ev("task_assigned", "coordinator", { target: "entity-agent", decision_code: "RESOLVE_ENTITY" }),
+    ev("tool_result_consumed", "entity-agent", { tool_name: "get_order", evidence_refs: [refs[0]] }),
+    ev("tool_result_consumed", "entity-agent", { tool_name: "get_customer_history", evidence_refs: [refs[1]] }),
+    ev("handoff", "entity-agent", { target: "coordinator", decision_code: "ENTITY_RESOLVED", evidence_refs: [refs[0], refs[1]] }),
+    ev("task_assigned", "coordinator", { target: "order-shipment-agent" }),
+    ev("task_assigned", "coordinator", { target: "payment-agent" }),
+    ev("tool_result_consumed", "order-shipment-agent", { tool_name: "get_order_items", evidence_refs: [refs[2]] }),
+    ev("tool_result_consumed", "payment-agent", { tool_name: "get_order_payments", evidence_refs: [refs[4]] }),
+    ev("tool_result_consumed", "order-shipment-agent", { tool_name: "get_shipment_summary", evidence_refs: [refs[3]] }),
+    ev("tool_result_consumed", "payment-agent", { tool_name: "get_refund_timeline", evidence_refs: [refs[5]] }),
+    ev("handoff", "order-shipment-agent", { target: "coordinator", decision_code: "SHIPMENT_" + shipVerdict.toUpperCase() }),
+    ev("handoff", "payment-agent", { target: "coordinator", decision_code: "PAYMENT_" + payVerdict.toUpperCase() }),
+    ev("tool_result_consumed", "coordinator", { tool_name: "get_policy", evidence_refs: [refs[6]] }),
+    ev("policy_decided", "conflict-resolver", { decision_code: "CONFLICTS_RECORDED" }),
+    ev("verification_completed", "verifier", { decision_code: "OUTPUT_VERIFIED" }),
+    ev("case_finalized", "coordinator"),
+  ];
+  return { output, trace };
+}
+
+/* ---------- derivations ---------- */
+function stageEvents(stage, trace) {
+  return trace.filter(e => stage.match ? stage.match(e)
+    : (stage.actors || []).includes(e.actor) && !(stage.exclude || []).includes(e.event_type));
+}
+
+function stageStatus(stage, ctx) {
+  const { output, trace } = ctx;
+  const events = stageEvents(stage, trace);
+  const entityStatus = get(output, "entity_resolution.status");
+  switch (stage.id) {
+    case "case": return "done";
+    case "entity":
+      if (entityStatus) return entityStatus === "resolved" ? "done" : "warn";
+      return events.length ? "done" : "waiting";
+    case "shipment": case "payment": {
+      const verdict = get(output, stage.id === "shipment" ? "shipment_analysis.verdict" : "payment_analysis.verdict");
+      if (!events.length && entityStatus && entityStatus !== "resolved") return "skipped";
+      if (verdict) return ["insufficient_evidence", "conflicting"].includes(verdict) ? "warn" : "done";
+      return events.length ? "done" : "waiting";
+    }
+    case "conflict": {
+      const conflicts = output && output.data_conflicts;
+      if (conflicts) return conflicts.some(c => c.selected_source == null) ? "warn" : "done";
+      return events.length ? "done" : "waiting";
+    }
+    case "verifier": {
+      if (output && runChecks(ctx).some(c => c.status === "fail")) return "fail";
+      return events.length ? "done" : "waiting";
+    }
+    case "output": return output ? "done" : (events.length ? "done" : "waiting");
+    default: return events.length ? "done" : "waiting";
+  }
+}
+
+function stageNote(stage, ctx) {
+  const { output, trace } = ctx;
+  const n = stageEvents(stage, trace).length;
+  const calls = stageEvents(stage, trace).filter(e => e.event_type === "tool_result_consumed").length;
+  const bits = [];
+  if (stage.id === "entity" && output) bits.push(get(output, "entity_resolution.status"));
+  if (stage.id === "shipment" && output) bits.push(get(output, "shipment_analysis.verdict"));
+  if (stage.id === "payment" && output) bits.push(get(output, "payment_analysis.verdict"));
+  if (stage.id === "conflict" && output) bits.push(`${(output.data_conflicts || []).length} conflict`);
+  if (n) bits.push(`${n} event${calls ? ` · ${calls} evidence` : ""}`);
+  return bits.filter(Boolean).join(" · ") || (stage.id === "case" ? "đã nạp input" : "chưa có trace");
+}
+
+function runChecks({ input, output, trace }) {
+  const c = [];
+  const add = (label, status, detail) => c.push({ label, status, detail });
+  if (!output) {
+    ["case_id đúng", "resolved ∩ rejected rỗng", "affected order_ids khớp entity", "seller_delay có late_seller_ids",
+     "refunded có refunded_total hợp lý", "recommended_refund ≤ refundable", "action_required có actions",
+     "no_action thì refund = 0", "evidence_refs đúng định dạng và có trong trace", "confidence ∈ [0,1]",
+     "root cause khớp verdict", "data_conflicts ghi đúng"].forEach(l => add(l, "waiting", "chưa có output"));
+    return c;
+  }
+  const er = output.entity_resolution || {}, sa = output.shipment_analysis || {}, pa = output.payment_analysis || {};
+  const fr = output.financial_resolution || {}, as = output.assessment || {};
+  const resolved = er.resolved_order_ids || [], rejected = er.rejected_candidates || [];
+  add("case_id đúng", output.case_id === input.case_id ? "done" : "fail", output.case_id);
+  const overlap = resolved.filter(x => rejected.includes(x));
+  add("resolved ∩ rejected rỗng", overlap.length ? "fail" : "done", overlap.join(", "));
+  const orders = get(output, "affected_entities.order_ids") || [];
+  const same = orders.length === resolved.length && orders.every(o => resolved.includes(o));
+  add("affected order_ids khớp entity", same ? "done" : "warn", same ? "" : `${orders.length} vs ${resolved.length}`);
+  add("seller_delay có late_seller_ids", sa.verdict !== "seller_delay" ? "na" : ((sa.late_seller_ids || []).length ? "done" : "fail"), sa.verdict);
+  add("refunded có refunded_total hợp lý", pa.verdict !== "refunded" ? "na" : (pa.refunded_total_brl > 0 ? "done" : "fail"), fmtBRL(pa.refunded_total_brl));
+  const rec = fr.recommended_refund_brl ?? 0;
+  add("recommended_refund ≤ refundable", pa.refundable_total_brl == null ? "na" : (rec <= pa.refundable_total_brl + 1e-9 ? "done" : "fail"),
+      `${fmtBRL(rec)} / ${fmtBRL(pa.refundable_total_brl)}`);
+  add("action_required có actions", as.case_status !== "action_required" ? "na" : ((output.resolution_actions || []).length ? "done" : "fail"), as.case_status);
+  add("no_action thì refund = 0", as.case_status !== "no_action" ? "na" : (rec > 0 ? "fail" : "done"), fmtBRL(rec));
+  const consumed = new Set(trace.filter(e => e.event_type === "tool_result_consumed").flatMap(e => e.evidence_refs || []));
+  const refs = output.evidence_refs || [];
+  const badFormat = refs.filter(r => !/^ev_[A-Za-z0-9_-]{20,96}$/.test(r));
+  const unlinked = refs.filter(r => !consumed.has(r));
+  add("evidence_refs đúng định dạng và có trong trace", badFormat.length ? "fail" : (unlinked.length ? "warn" : "done"),
+      badFormat.length ? `${badFormat.length} sai định dạng` : (unlinked.length ? `${unlinked.length}/${refs.length} chưa có tool_result_consumed` : `${refs.length} ref`));
+  const confs = [as.confidence, er.confidence, ...(output.claim_assessments || []).map(x => x.confidence)].filter(x => x != null);
+  add("confidence ∈ [0,1]", confs.every(x => x >= 0 && x <= 1) ? "done" : "fail", confs.join(", "));
+  add("root cause khớp verdict", "manual", "do verifier_agent.py quyết định");
+  const conflicts = output.data_conflicts || [];
+  const badConf = conflicts.filter(x => (x.sources || []).length < 2 || (x.selected_source != null && !(x.sources || []).includes(x.selected_source)));
+  add("data_conflicts ghi đúng", conflicts.length ? (badConf.length ? "fail" : "done") : "na", `${conflicts.length} conflict`);
+  return c;
+}
+
+/* ---------- rendering ---------- */
+function renderStats() {
+  const s = state.summary;
+  const box = document.getElementById("stats");
+  if (!s) return box.replaceChildren();
+  const done = s.cases.filter(c => c.has_output).length;
+  fill(box,
+    h("span", {}, h("b", {}, s.cases.length), " case"),
+    h("span", {}, h("b", {}, done), " output"),
+    h("span", {}, h("b", {}, s.trace_events), " trace event"),
+    s.case_set_version ? h("span", {}, mono(s.case_set_version)) : null,
+  );
+}
+
+function mainTopic(topics) {
+  return (topics || []).find(t => t !== "requested_full_refund") || (topics || [])[0] || "—";
+}
+
+function renderTopicFilter() {
+  const select = document.getElementById("topic");
+  if (select.options.length > 1 || !state.summary) return;
+  const topics = [...new Set(state.summary.cases.map(c => mainTopic(c.topics)))].sort();
+  topics.forEach(t => select.append(h("option", { value: t }, t)));
+}
+
+function renderCaseList() {
+  const list = document.getElementById("cases");
+  if (!state.summary) return;
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const topic = document.getElementById("topic").value;
+  const st = document.getElementById("state").value;
+  const items = state.summary.cases.filter(c => {
+    if (topic && mainTopic(c.topics) !== topic) return false;
+    if (st === "done" && !c.has_output) return false;
+    if (st === "pending" && c.has_output) return false;
+    return !q || [c.case_id, ...c.topics].join(" ").toLowerCase().includes(q);
+  });
+  if (!items.length) return list.replaceChildren(h("li", { class: "list-empty" }, "Không có case phù hợp."));
+  list.replaceChildren(...items.map(c => {
+    let badge;
+    if (c.has_output) badge = pill(c.entity_status && c.entity_status !== "resolved" ? "warn" : "done");
+    else if (c.trace_events) badge = h("span", { class: "pill s-warn" }, "Đang chạy");
+    else badge = h("span", { class: "pill s-waiting" }, "Chưa chạy");
+    return h("li", {
+      class: "case-item", role: "button", tabindex: "0", "aria-current": c.case_id === state.caseId ? "true" : "false",
+      onclick: () => selectCase(c.case_id),
+      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCase(c.case_id); } },
+    },
+      h("div", { class: "grow" }, h("div", { class: "id" }, c.case_id), h("div", { class: "topic" }, mainTopic(c.topics))),
+      badge,
+    );
+  }));
+}
+
+function context() {
+  if (!state.detail) return null;
+  const { input } = state.detail;
+  if (state.demo) {
+    const demo = demoData(input);
+    return { input, output: demo.output, trace: demo.trace, demo: true };
+  }
+  return { input, output: state.detail.output, trace: state.detail.trace, demo: false };
+}
+
+function renderCaseHeader(ctx) {
+  const { input } = ctx;
+  const req = input.customer_request || {};
+  const claimed = req.claimed_order_id;
+  return h("section", { class: "card" }, h("div", { class: "bd" },
+    h("div", { class: "case-head" },
+      h("h2", {}, input.case_id),
+      h("span", { class: "meta" }, "Mở lúc ", input.opened_at || "—"),
+      h("span", { class: "chip" }, "policy ", mono(input.policy_version || "—")),
+      h("span", { class: "chip" }, "ngôn ngữ ", req.language || "—"),
+    ),
+    req.message ? h("p", { class: "message" }, req.message) : null,
+    h("dl", { class: "kv" },
+      h("dt", {}, "Claims"), h("dd", {}, h("div", { class: "chips" }, (req.claims || []).map(c => h("span", { class: "chip" }, mono(c.claim_id), " ", c.topic)))),
+      h("dt", {}, "Claimed order ID"), h("dd", {}, claimed ? mono(claimed) : "—"),
+      h("dt", {}, "Candidate order IDs"), h("dd", {}, h("div", { class: "chips" }, (input.candidate_order_ids || []).map(id =>
+        h("span", { class: "chip" }, mono(id), id === claimed ? " · claimed" : "")))),
+      h("dt", {}, "Customer hint"), h("dd", {}, input.customer_unique_id_hint ? mono(input.customer_unique_id_hint) : "—"),
+      h("dt", {}, "Investigation scope"), h("dd", {}, h("div", { class: "chips" },
+        Object.entries(input.investigation_scope || {}).map(([k, v]) => h("span", { class: `chip ${v ? "" : "muted"}` }, v ? "✓ " : "✗ ", k)))),
+    ),
+  ));
+}
+
+function nodeButton(stage, ctx) {
+  const status = stageStatus(stage, ctx);
+  return h("button", {
+    type: "button", class: `node st-${status}`, "aria-pressed": state.stage === stage.id ? "true" : "false",
+    onclick: () => { state.stage = stage.id; store.set("stage", stage.id); renderMain(); },
+  },
+    h("span", { class: "t" }, stage.title),
+    h("span", { class: "row" }, owner(stage.owner), pill(status)),
+    h("span", { class: "n" }, stageNote(stage, ctx)),
+  );
+}
+
+const arrow = () => h("span", { class: "arrow", "aria-hidden": "true" }, "→");
+
+function renderPipeline(ctx) {
+  const by = Object.fromEntries(STAGES.map(s => [s.id, s]));
+  const unresolved = ["ambiguous", "not_found"].includes(get(ctx.output, "entity_resolution.status"));
+  return h("section", { class: "card" },
+    h("div", { class: "hd" }, h("h2", {}, "Luồng xử lý"), h("span", { class: "meta" }, "bấm vào từng bước để xem chi tiết")),
+    h("div", { class: "bd" },
+      h("div", { class: "pipeline" },
+        nodeButton(by.case, ctx), arrow(), nodeButton(by.entity, ctx), arrow(), nodeButton(by.coordinator, ctx), arrow(),
+        h("div", { class: "parallel" }, nodeButton(by.shipment, ctx), nodeButton(by.payment, ctx)),
+        arrow(), nodeButton(by.conflict, ctx), arrow(), nodeButton(by.verifier, ctx), arrow(), nodeButton(by.output, ctx),
+      ),
+      unresolved ? h("p", { class: "meta" }, "Entity chưa resolve → coordinator finalize insufficient_evidence, bỏ qua 2 specialist.") : null,
+      h("div", { class: "legend" }, ["done", "warn", "fail", "waiting", "skipped"].map(s => h("span", {}, pill(s)))),
+    ),
+  );
+}
+
+function renderStageDetail(ctx) {
+  const stage = STAGES.find(s => s.id === state.stage) || STAGES[1];
+  const events = stageEvents(stage, ctx.trace);
+  return h("section", { class: "card" },
+    h("div", { class: "hd" }, h("h3", {}, stage.title), owner(stage.owner), h("span", { class: "meta" }, mono(stage.file))),
+    h("div", { class: "bd" },
+      h("div", { class: "stage-detail" },
+        h("div", {},
+          h("h4", {}, "Nhiệm vụ"), h("ul", {}, stage.tasks.map(t => h("li", {}, t))),
+          stage.tools.length ? [h("h4", { style: "margin-top:12px" }, "MCP tool được phép"), h("div", { class: "chips" }, stage.tools.map(t => h("span", { class: "chip" }, mono(t))))] : null,
+          stage.fields.length ? [h("h4", { style: "margin-top:12px" }, "Field output sở hữu"), h("div", { class: "chips" }, stage.fields.map(f => h("span", { class: "chip" }, mono(f))))] : null,
+        ),
+        h("div", {},
+          h("h4", {}, `Trace event (${events.length})`),
+          events.length ? traceTable(events) : h("p", { class: "meta" }, "Chưa có event. Sẽ hiện khi logic của ", OWNERS[stage.owner], " được ghép và chạy ", mono("day09 run"), "."),
+        ),
+      ),
+    ),
+  );
+}
+
+function emptyCard(owner, file, schemaHint) {
+  return h("div", { class: "empty" },
+    h("span", {}, "Chờ logic ", OWNERS[owner], " · ", h("span", { class: "file" }, file)),
+    schemaHint ? h("div", { class: "chips" }, schemaHint.map(v => h("span", { class: "chip muted" }, v))) : null,
+  );
+}
+
+function resultCard(title, ownerKey, body) {
+  return h("section", { class: "card" }, h("div", { class: "hd" }, h("h3", {}, title), owner(ownerKey)), h("div", { class: "bd" }, body));
+}
+
+const idChips = ids => (ids && ids.length) ? h("div", { class: "chips" }, ids.map(i => h("span", { class: "chip" }, mono(i)))) : h("span", { class: "meta" }, "[]");
+
+function renderResults(ctx) {
+  const o = ctx.output;
+  const er = o && o.entity_resolution, cc = o && o.customer_context, sa = o && o.shipment_analysis;
+  const pa = o && o.payment_analysis, fr = o && o.financial_resolution, ae = o && o.affected_entities;
+  const rc = o && o.root_cause_analysis, as = o && o.assessment;
+
+  const entity = er ? h("dl", { class: "kv" },
+    h("dt", {}, "Status"), h("dd", {}, h("span", { class: "big" }, er.status), " ", pill(er.status === "resolved" ? "done" : "warn")),
+    h("dt", {}, "Confidence"), h("dd", { class: "num" }, er.confidence),
+    h("dt", {}, "Resolved"), h("dd", {}, idChips(er.resolved_order_ids)),
+    h("dt", {}, "Rejected"), h("dd", {}, idChips(er.rejected_candidates)),
+    h("dt", {}, "customer_unique_id"), h("dd", {}, cc && cc.customer_unique_id ? mono(cc.customer_unique_id) : "null"),
+    h("dt", {}, "Related orders"), h("dd", {}, idChips(cc && cc.related_order_ids)),
+  ) : emptyCard("p1", "agents/entity_agent.py", ENTITY_STATUSES);
+
+  const shipment = sa ? h("dl", { class: "kv" },
+    h("dt", {}, "Verdict"), h("dd", {}, h("span", { class: "big" }, sa.verdict)),
+    h("dt", {}, "Timeline đầy đủ"), h("dd", {}, sa.timeline_complete ? "có" : "không"),
+    h("dt", {}, "Late sellers"), h("dd", {}, idChips(sa.late_seller_ids)),
+    h("dt", {}, "Items"), h("dd", {}, idChips(ae && ae.item_ids)),
+    h("dt", {}, "Sellers"), h("dd", {}, idChips(ae && ae.seller_ids)),
+    h("dt", {}, "Shipments"), h("dd", {}, idChips(ae && ae.shipment_ids)),
+  ) : emptyCard("p2", "agents/order_shipment_agent.py", SHIPMENT_VERDICTS);
+
+  const payment = pa ? [
+    h("dl", { class: "kv" },
+      h("dt", {}, "Verdict"), h("dd", {}, h("span", { class: "big" }, pa.verdict)),
+      h("dt", {}, "Captured"), h("dd", { class: "num" }, fmtBRL(pa.captured_total_brl)),
+      h("dt", {}, "Refunded"), h("dd", { class: "num" }, fmtBRL(pa.refunded_total_brl)),
+      h("dt", {}, "Refundable"), h("dd", { class: "num" }, fmtBRL(pa.refundable_total_brl)),
+      h("dt", {}, "Đề xuất hoàn"), h("dd", { class: "num" }, h("b", {}, fmtBRL(fr && fr.recommended_refund_brl))),
+      h("dt", {}, "Payment refs"), h("dd", {}, idChips(ae && ae.payment_references)),
+    ),
+    fr && fr.refund_lines && fr.refund_lines.length ? h("div", { class: "table-wrap", style: "margin-top:10px" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "reason_code"), h("th", {}, "entity_id"), h("th", {}, "amount"))),
+      h("tbody", {}, fr.refund_lines.map(l => h("tr", {}, h("td", {}, mono(l.reason_code)), h("td", {}, l.entity_id ? mono(l.entity_id) : "null"), h("td", { class: "num" }, fmtBRL(l.amount_brl))))),
+    )) : null,
+  ] : emptyCard("p3", "agents/payment_agent.py", PAYMENT_VERDICTS);
+
+  const conflicts = o ? ((o.data_conflicts || []).length ? h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "field"), h("th", {}, "sources"), h("th", {}, "selected"), h("th", {}, "resolution_code"))),
+    h("tbody", {}, o.data_conflicts.map(c => h("tr", {},
+      h("td", {}, mono(c.field)), h("td", {}, (c.sources || []).join(", ")),
+      h("td", {}, c.selected_source == null ? pill("warn") : mono(c.selected_source)), h("td", {}, mono(c.resolution_code))))),
+  )) : h("span", { class: "meta" }, "Không có conflict.")) : emptyCard("p4", "workflow.py (conflict resolver)");
+
+  const final = as ? h("dl", { class: "kv" },
+    h("dt", {}, "Primary issue"), h("dd", {}, h("span", { class: "big" }, as.primary_issue)),
+    h("dt", {}, "Case status"), h("dd", {}, as.case_status),
+    h("dt", {}, "Confidence"), h("dd", { class: "num" }, as.confidence),
+    h("dt", {}, "Secondary"), h("dd", {}, idChips(as.secondary_issues)),
+    h("dt", {}, "Root causes"), h("dd", {}, h("div", { class: "chips" }, ((rc && rc.ranked_causes) || []).map(c => h("span", { class: "chip" }, `#${c.rank} `, mono(c.cause_code))))),
+    h("dt", {}, "Responsible"), h("dd", {}, h("div", { class: "chips" }, ((rc && rc.responsible_parties) || []).map(p => h("span", { class: "chip" }, p.party_type, p.party_id ? [" · ", mono(p.party_id)] : "")))),
+    h("dt", {}, "Actions"), h("dd", {}, idChips(o.resolution_actions)),
+    h("dt", {}, "Evidence refs"), h("dd", {}, `${(o.evidence_refs || []).length} ref`),
+  ) : emptyCard("p4", "workflow.py (final output)");
+
+  return h("div", { class: "grid-2" },
+    resultCard("Entity + customer context", "p1", entity),
+    resultCard("Shipment analysis", "p2", shipment),
+    resultCard("Payment + financial resolution", "p3", payment),
+    resultCard("Data conflicts", "p4", conflicts),
+    resultCard("Assessment + root cause", "p4", final),
+    resultCard("Verifier checklist", "p4", renderChecks(ctx)),
+  );
+}
+
+function renderChecks(ctx) {
+  return h("ul", { class: "checks" }, runChecks(ctx).map((c, i) =>
+    h("li", {}, h("span", { class: "num", style: "color:var(--faint)" }, String(i + 1).padStart(2, "0")),
+      h("span", { class: "lbl" }, c.label, c.detail ? h("div", { class: "det" }, c.detail) : null), pill(c.status))));
+}
+
+function traceTable(events) {
+  const time = t => { const d = new Date(t); return isNaN(d) ? t : d.toISOString().slice(11, 23); };
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "time"), h("th", {}, "event"), h("th", {}, "actor → target"), h("th", {}, "tool / decision"), h("th", {}, "refs"))),
+    h("tbody", {}, events.map(e => h("tr", {},
+      h("td", { class: "num" }, time(e.occurred_at)),
+      h("td", {}, mono(e.event_type)),
+      h("td", {}, e.actor, e.target ? [" → ", e.target] : ""),
+      h("td", {}, e.tool_name ? mono(e.tool_name) : "", e.tool_name && e.decision_code ? " · " : "", e.decision_code ? mono(e.decision_code) : ""),
+      h("td", { class: "num" }, (e.evidence_refs || []).length || ""),
+    ))),
+  ));
+}
+
+function renderTrace(ctx) {
+  const counts = {};
+  ctx.trace.forEach(e => { counts[e.event_type] = (counts[e.event_type] || 0) + 1; });
+  const required = ["case_received", "task_assigned", "handoff", "verification_completed", "case_finalized"];
+  return h("section", { class: "card" },
+    h("div", { class: "hd" }, h("h2", {}, "Trace timeline"), h("span", { class: "meta" }, `${ctx.trace.length} event`)),
+    h("div", { class: "bd" },
+      h("div", { class: "chips", style: "margin-bottom:10px" }, required.map(t =>
+        h("span", { class: `pill ${counts[t] ? "s-done" : "s-waiting"}` }, t, counts[t] ? ` ×${counts[t]}` : ""))),
+      ctx.trace.length ? traceTable(ctx.trace) : h("p", { class: "meta" }, "Chưa có trace cho case này. Chạy ", mono("day09 run"), " sau khi workflow được ghép."),
+    ),
+  );
+}
+
+function renderRaw(ctx) {
+  return h("section", { class: "card" }, h("details", {},
+    h("summary", {}, "JSON thô (input / output)"),
+    h("div", { class: "bd grid-2" },
+      h("div", {}, h("h4", { class: "meta" }, `inputs/${ctx.input.case_id}.json`), h("pre", { class: "json" }, JSON.stringify(ctx.input, null, 2))),
+      h("div", {}, h("h4", { class: "meta" }, `outputs/${ctx.input.case_id}.json`), h("pre", { class: "json" }, ctx.output ? JSON.stringify(ctx.output, null, 2) : "— chưa có —")),
+    ),
+  ));
+}
+
+/* ---------- conversation view: trace rendered as an A2A chat ---------- */
+const ACTOR_ROLE = (() => {
+  const map = {};
+  for (const stage of STAGES) for (const actor of stage.actors || []) map[actor] = stage;
+  return map;
+})();
+const ACTOR_LABEL = {
+  coordinator: "Coordinator", "entity-agent": "Entity Agent", "order-shipment-agent": "Order/Shipment Agent",
+  "shipment-agent": "Shipment Agent", "order-agent": "Order Agent", "payment-agent": "Payment Agent",
+  "refund-agent": "Refund Agent", "payment-refund-agent": "Payment/Refund Agent",
+  "conflict-resolver": "Conflict Resolver", verifier: "Verifier", customer: "Khách hàng",
+};
+const actorName = a => ACTOR_LABEL[a] || a;
+const actorOwner = a => (ACTOR_ROLE[a] && ACTOR_ROLE[a].owner) || "pc";
+const DECISION_TEXT = {
+  RESOLVE_ENTITY: "xác định order và khách hàng giúp mình",
+  ENTITY_RESOLVED: "đã xác định được order",
+  ENTITY_AMBIGUOUS: "chưa đủ bằng chứng để chọn một order (ambiguous)",
+  ENTITY_NOT_FOUND: "không tìm thấy order hợp lệ (not_found)",
+};
+const decisionText = code => DECISION_TEXT[code] || (code ? code.toLowerCase().replaceAll("_", " ") : "");
+
+function avatar(actor) {
+  if (actor === "customer") return h("span", { class: "avatar av-customer", "aria-hidden": "true" }, "KH");
+  const letters = actorName(actor).split(/[\s/]+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  return h("span", { class: `avatar o-${actorOwner(actor)}`, "aria-hidden": "true" }, letters);
+}
+
+function bubble({ actor, target, time, stamp, cls, body }) {
+  const who = actor === "customer" ? "Khách hàng" : actorName(actor);
+  return h("div", { class: `msg ${cls || ""}` }, avatar(actor), h("div", { class: "bubble" },
+    h("div", { class: "who" },
+      h("b", {}, who), actor !== "customer" ? owner(actorOwner(actor)) : null,
+      target ? h("span", { class: "to" }, "→ ", actorName(target)) : null,
+      stamp || time ? h("span", { class: "time" }, stamp || clock(time)) : null),
+    body));
+}
+
+function clock(t) { const d = new Date(t); return isNaN(d) ? t : d.toISOString().slice(11, 23); }
+
+function facts(pairs) {
+  const rows = pairs.filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length));
+  return rows.length ? h("dl", { class: "facts" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])) : null;
+}
+const idList = ids => h("span", { class: "chips" }, (ids || []).map(i => h("span", { class: "chip" }, mono(i))));
+
+function handoffFacts(actor, output) {
+  if (!output) return null;
+  const stage = ACTOR_ROLE[actor];
+  if (!stage) return null;
+  const er = output.entity_resolution || {}, cc = output.customer_context || {};
+  const sa = output.shipment_analysis || {}, pa = output.payment_analysis || {};
+  const fr = output.financial_resolution || {}, ae = output.affected_entities || {};
+  if (stage.id === "entity") return facts([
+    ["Order đúng", er.resolved_order_ids && er.resolved_order_ids.length ? idList(er.resolved_order_ids) : "—"],
+    ["Loại bỏ", idList(er.rejected_candidates)], ["Độ tin cậy", er.confidence],
+    ["Khách hàng", cc.customer_unique_id ? mono(cc.customer_unique_id) : null], ["Order liên quan", idList(cc.related_order_ids)],
+  ]);
+  if (stage.id === "shipment") return facts([
+    ["Kết luận", mono(sa.verdict)], ["Timeline đủ", sa.timeline_complete == null ? null : (sa.timeline_complete ? "có" : "không")],
+    ["Seller trễ", idList(sa.late_seller_ids)], ["Seller", idList(ae.seller_ids)],
+  ]);
+  if (stage.id === "payment") return facts([
+    ["Kết luận", mono(pa.verdict)], ["Đã thu", fmtBRL(pa.captured_total_brl)], ["Đã hoàn", fmtBRL(pa.refunded_total_brl)],
+    ["Còn hoàn được", fmtBRL(pa.refundable_total_brl)], ["Đề xuất hoàn", fmtBRL(fr.recommended_refund_brl)],
+  ]);
+  return null;
+}
+
+function buildChat(ctx) {
+  const { input, output, trace } = ctx;
+  const req = input.customer_request || {};
+  const items = [];
+  items.push(bubble({
+    actor: "customer", stamp: input.opened_at, cls: "customer",
+    body: [h("p", {}, req.message || "(không có nội dung)"), facts([
+      ["Yêu cầu", h("span", { class: "chips" }, (req.claims || []).map(c => h("span", { class: "chip" }, c.topic)))],
+      ["Order khách nhắc", req.claimed_order_id ? mono(req.claimed_order_id) : null],
+      ["Candidate", idList(input.candidate_order_ids)],
+      ["Gợi ý khách", input.customer_unique_id_hint ? mono(input.customer_unique_id_hint) : null],
+    ])],
+  }));
+
+  for (let i = 0; i < trace.length; i++) {
+    const e = trace[i];
+    switch (e.event_type) {
+      case "case_received":
+        items.push(h("div", { class: "divider" }, `${actorName(e.actor)} nhận case · ${clock(e.occurred_at)}`));
+        break;
+      case "task_assigned":
+        items.push(bubble({ actor: e.actor, target: e.target, time: e.occurred_at,
+          body: h("p", {}, `Nhờ ${actorName(e.target || "?")} ${decisionText(e.decision_code) || "xử lý phần việc của mình"}.`) }));
+        break;
+      case "tool_result_consumed": {
+        // Group consecutive evidence reads by the same actor into one message.
+        const group = [e];
+        while (trace[i + 1] && trace[i + 1].event_type === "tool_result_consumed" && trace[i + 1].actor === e.actor) group.push(trace[++i]);
+        const refs = group.reduce((n, g) => n + (g.evidence_refs || []).length, 0);
+        items.push(bubble({ actor: e.actor, time: e.occurred_at,
+          body: [h("p", {}, `Tra cứu MCP, nhận ${refs} evidence.`),
+            h("div", { class: "tools" }, group.map(g => h("span", { class: "chip" }, "🔧 ", mono(g.tool_name || "?"))))] }));
+        break;
+      }
+      case "handoff":
+        items.push(bubble({ actor: e.actor, target: e.target, time: e.occurred_at,
+          body: [h("p", {}, `Xong phần mình: ${decisionText(e.decision_code) || "đã bàn giao kết quả"}.`), handoffFacts(e.actor, output)] }));
+        break;
+      case "policy_decided":
+        items.push(bubble({ actor: e.actor, time: e.occurred_at,
+          body: h("p", {}, `Áp dụng policy: ${decisionText(e.decision_code) || "đã quyết định"}.`) }));
+        break;
+      case "verification_completed": {
+        const checks = runChecks(ctx).filter(c => ["done", "fail", "warn"].includes(c.status));
+        const passed = checks.filter(c => c.status === "done").length;
+        const failed = checks.filter(c => c.status === "fail");
+        items.push(bubble({ actor: e.actor, time: e.occurred_at,
+          body: [h("p", {}, `Đã kiểm tra chéo output: ${passed}/${checks.length} mục đạt.`),
+            failed.length ? h("p", {}, "Lỗi: ", failed.map(c => c.label).join("; ")) : null] }));
+        break;
+      }
+      case "case_finalized":
+        items.push(h("div", { class: "divider" }, `Case đã finalize · ${clock(e.occurred_at)}`));
+        break;
+      default:
+        items.push(bubble({ actor: e.actor, target: e.target, time: e.occurred_at, body: h("p", {}, mono(e.event_type)) }));
+    }
+  }
+
+  if (output && output.assessment) {
+    const as = output.assessment, fr = output.financial_resolution || {};
+    items.push(bubble({ actor: "coordinator", target: "customer", cls: "final",
+      body: [h("p", {}, h("b", {}, "Kết luận cuối")), facts([
+        ["Vấn đề chính", mono(as.primary_issue)], ["Trạng thái", mono(as.case_status)], ["Độ tin cậy", as.confidence],
+        ["Hoàn tiền", fmtBRL(fr.recommended_refund_brl)], ["Hành động", idList(output.resolution_actions)],
+        ["Bằng chứng", `${(output.evidence_refs || []).length} evidence ref`],
+      ])] }));
+  }
+  return items;
+}
+
+function stopPlayback() { clearInterval(state.playTimer); state.playTimer = null; state.play = null; }
+
+function startPlayback(total) {
+  stopPlayback();
+  state.play = 1;
+  renderMain();
+  state.playTimer = setInterval(() => {
+    state.play += 1;
+    if (state.play >= total) stopPlayback();
+    renderMain();
+  }, 700);
+}
+
+function renderChat(ctx) {
+  const items = buildChat(ctx);
+  const shown = state.play == null ? items : items.slice(0, state.play);
+  const noRun = !ctx.trace.length && !ctx.output;
+  return h("section", { class: "card chat-card" },
+    h("div", { class: "hd" },
+      h("h2", {}, "Hội thoại giữa các agent"),
+      h("span", { class: "meta" }, `${ctx.trace.length} event`),
+      h("span", { class: "spacer" }),
+      items.length > 1 ? (state.play == null
+        ? h("button", { class: "btn", type: "button", onclick: () => startPlayback(items.length) }, "▶ Phát lại")
+        : h("button", { class: "btn", type: "button", onclick: () => { stopPlayback(); renderMain(); } }, "Hiện tất cả")) : null,
+    ),
+    h("div", { class: "bd" },
+      h("div", { class: "chat" }, shown,
+        state.play != null && state.play < items.length ? h("div", { class: "typing" }, "đang xử lý…") : null),
+      noRun ? h("p", { class: "chat-note" }, "Chưa có hội thoại vì workflow chưa chạy. Sau khi ghép logic và chạy ",
+        mono("day09 run"), ", các agent sẽ hiện ở đây. Bật \"Dữ liệu mẫu\" để xem trước.") : null,
+    ),
+  );
+}
+
+function renderTabs() {
+  const tab = (id, label) => h("button", {
+    class: "tab", type: "button", role: "tab", "aria-selected": state.view === id ? "true" : "false",
+    onclick: () => { state.view = id; store.set("view", id); stopPlayback(); renderMain(); },
+  }, label);
+  return h("div", { class: "tabs", role: "tablist", "aria-label": "Chế độ xem" }, tab("chat", "Hội thoại"), tab("flow", "Dashboard"));
+}
+
+function renderMain() {
+  const main = document.getElementById("main");
+  const ctx = context();
+  if (!ctx) return main.replaceChildren(h("div", { class: "placeholder" }, state.summary && !state.summary.cases.length
+    ? ["Không tìm thấy input. Giải nén ZIP L3B vào root repo rồi chạy ", mono("day09 validate-inputs"), "."]
+    : "Chọn một case bên trái."));
+  const scrollY = window.scrollY;
+  fill(main,
+    ctx.demo ? h("div", { class: "demo-banner" }, "DỮ LIỆU MẪU: output và trace bên dưới là giả lập để xem giao diện, không phải kết quả thật và không ghi ra outputs/.") : null,
+    renderTabs(),
+    state.view === "chat"
+      ? [renderChat(ctx), renderPipeline(ctx)]
+      : [renderCaseHeader(ctx), renderPipeline(ctx), renderStageDetail(ctx), renderResults(ctx), renderTrace(ctx), renderRaw(ctx)],
+  );
+  window.scrollTo(0, scrollY);
+}
+
+/* ---------- data flow ---------- */
+async function loadSummary() {
+  state.summary = await fetchJSON("/api/summary");
+  renderStats(); renderTopicFilter(); renderCaseList();
+  if (!state.caseId || !state.summary.cases.some(c => c.case_id === state.caseId)) {
+    state.caseId = state.summary.cases.length ? state.summary.cases[0].case_id : null;
+  }
+}
+
+async function loadDetail() {
+  state.detail = state.caseId ? await fetchJSON(`/api/case/${encodeURIComponent(state.caseId)}`) : null;
+  renderMain();
+}
+
+async function refresh() {
+  try { await loadSummary(); await loadDetail(); }
+  catch (err) { document.getElementById("main").replaceChildren(h("div", { class: "placeholder" }, "Không tải được dữ liệu: ", String(err.message || err))); }
+}
+
+async function selectCase(caseId) {
+  stopPlayback();
+  state.caseId = caseId; store.set("case", caseId);
+  renderCaseList();
+  try { await loadDetail(); } catch (err) { console.error(err); }
+}
+
+function setLive(on) {
+  state.live = on; store.set("live", on);
+  clearInterval(liveTimer);
+  if (on) liveTimer = setInterval(refresh, 3000);
+}
+
+document.getElementById("search").addEventListener("input", renderCaseList);
+document.getElementById("topic").addEventListener("change", renderCaseList);
+document.getElementById("state").addEventListener("change", renderCaseList);
+document.getElementById("refresh").addEventListener("click", refresh);
+const demoBox = document.getElementById("demo");
+demoBox.checked = state.demo;
+demoBox.addEventListener("change", () => { state.demo = demoBox.checked; store.set("demo", state.demo); stopPlayback(); renderMain(); });
+const liveBox = document.getElementById("live");
+liveBox.checked = state.live;
+liveBox.addEventListener("change", () => setLive(liveBox.checked));
+setLive(state.live);
+refresh();
+</script>
+</body>
+</html>
