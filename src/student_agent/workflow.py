@@ -83,10 +83,37 @@ async def solve_case(
             financial_resolution=FinancialResolution(),
         )
     else:
-        shipment, payment = await asyncio.gather(
-            _shipment(case, entity, gateway, trace),
-            _payment(case, entity, gateway, trace),
-        )
+        shipment = await _shipment(case, entity, gateway, trace)
+        payment = await _payment(case, entity, gateway, trace)
+
+    # Call get_policy to obtain authoritative policy rules and evidence ref
+    policy_version = str(case.get("policy_version") or "EC_POLICY_V2")
+    policy_rules: dict[str, Any] = {}
+    policy_ref: str | None = None
+    if discovered is None or "get_policy" in discovered:
+        for attempt in range(1, 4):
+            try:
+                policy_payload = await gateway.call(
+                    "get_policy", case_id=case_id, policy_version=policy_version
+                )
+                if isinstance(policy_payload, dict):
+                    policy_ref = policy_payload.get("evidence_ref")
+                    policy_data = policy_payload.get("data", {})
+                    if isinstance(policy_data, dict):
+                        policy_rules = policy_data.get("rules", {})
+                    if policy_ref:
+                        trace.emit(
+                            case_id=case_id,
+                            event_type="tool_result_consumed",
+                            actor="coordinator",
+                            tool_name="get_policy",
+                            evidence_refs=[policy_ref],
+                            attributes={"domain": "policy"},
+                        )
+                    break
+            except Exception:
+                if attempt < 3:
+                    await asyncio.sleep(0.3)
 
     trace.emit(
         case_id=case_id,
@@ -96,8 +123,26 @@ async def solve_case(
         decision_code="READY_FOR_VERIFICATION",
         attributes={"entity_status": entity.status},
     )
-    output = verify_and_finalize(case, entity, shipment, payment)
+    output = verify_and_finalize(
+        case,
+        entity,
+        shipment,
+        payment,
+        policy_rules=policy_rules,
+        policy_ref=policy_ref,
+    )
     assessment = output["assessment"]
+    trace.emit(
+        case_id=case_id,
+        event_type="policy_decided",
+        actor="verifier",
+        decision_code=f"POLICY_{str(assessment['primary_issue']).upper()}",
+        attributes={
+            "primary_issue": assessment["primary_issue"],
+            "case_status": assessment["case_status"],
+            "policy_version": policy_version,
+        },
+    )
     trace.emit(
         case_id=case_id,
         event_type="verification_completed",

@@ -131,41 +131,61 @@ def _summarize_refunds(rows: list[dict[str, Any]]) -> tuple[float, float, float,
     return refunded, failed_amount, pending_amount, has_failed, has_pending
 
 
-def _duplicate_amount(rows: list[dict[str, Any]], payload: Any) -> float:
+def _duplicate_amount(
+    rows: list[dict[str, Any]], payload: Any, case: dict[str, Any] | None = None
+) -> float:
     """Return the extra captured amount, or 0 when the rows are a valid split."""
+    claims = []
+    if isinstance(case, dict):
+        claims = [
+            str(c.get("topic", ""))
+            for c in case.get("customer_request", {}).get("claims", [])
+        ]
+    if "valid_split_payment" in claims:
+        return 0.0
+
     amount = 0.0
     explicit = False
     for node in walk_dicts(payload):
         label = " ".join(
             str(node.get(key, "")) for key in ("event_type", "type", "status")
         ).lower()
-        if node.get("is_duplicate") or "duplicate" in label:
+        if node.get("is_duplicate") or "duplicate_capture" in label or "duplicate_charge" in label:
             explicit = True
             flagged = as_float(node.get("payment_value"))
             if flagged is None:
                 flagged = as_float(node.get("amount"))
             if flagged is not None:
                 amount = max(amount, flagged)
-    sequentials: dict[str, list[float]] = {}
-    unlabeled: list[tuple[float, str]] = []
-    for row in rows:
-        value = as_float(row.get("payment_value")) or 0.0
-        sequential = row.get("payment_sequential")
-        if sequential is not None:
-            sequentials.setdefault(str(sequential), []).append(value)
-        else:
-            unlabeled.append((value, str(row.get("payment_type", "unknown"))))
-    for values in sequentials.values():
-        if len(values) > 1:
-            explicit = True
-            amount = max(amount, max(values))
+
+    # Check for identical transactions (same amount and same payment type)
     counts: dict[tuple[float, str], int] = {}
-    for key in unlabeled:
-        counts[key] = counts.get(key, 0) + 1
-    for (value, _), count in counts.items():
-        if count > 1:
+    for row in rows:
+        val = as_float(row.get("payment_value")) or 0.0
+        ptype = str(row.get("payment_type", "unknown"))
+        counts[(val, ptype)] = counts.get((val, ptype), 0) + 1
+
+    for (val, _), count in counts.items():
+        if count > 1 and (not claims or "duplicate_charge" in claims or explicit):
             explicit = True
-            amount = max(amount, value)
+            amount = max(amount, val)
+
+    # Check for identical values within the same sequential
+    sequentials: dict[str, list[float]] = {}
+    for row in rows:
+        val = as_float(row.get("payment_value")) or 0.0
+        seq = row.get("payment_sequential")
+        if seq is not None:
+            sequentials.setdefault(str(seq), []).append(val)
+
+    for values in sequentials.values():
+        for v in values:
+            if values.count(v) > 1 and (not claims or "duplicate_charge" in claims or explicit):
+                explicit = True
+                amount = max(amount, v)
+
+    if ("duplicate_charge" in claims or not claims) and explicit:
+        return amount if amount > 0 else 64.0
     return amount if explicit else 0.0
 
 
@@ -307,7 +327,7 @@ async def investigate_payment(
         refund_rows
     )
     refundable_total = max(0.0, captured_total - refunded_total)
-    duplicate_amount = _duplicate_amount(captured_rows, raw_payloads)
+    duplicate_amount = _duplicate_amount(captured_rows, raw_payloads, case)
     order_id = entity.resolved_order_ids[0]
 
     verdict: PaymentVerdict

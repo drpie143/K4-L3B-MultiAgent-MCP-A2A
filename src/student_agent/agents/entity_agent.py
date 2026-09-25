@@ -60,7 +60,7 @@ DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2})?")
 
 # A mismatch on a hard hint rejects the candidate outright.
 HARD_HINTS: dict[str, tuple[str, ...]] = {
-    "customer_unique_id": ("customer_unique_id",),
+    "customer_unique_id": ("customer_unique_id", "customer_unique_id_hint"),
     "customer_id": ("customer_id",),
 }
 # Soft hints only add to or subtract from a candidate's score.
@@ -130,10 +130,18 @@ class _CaseSession:
                 try:
                     evidence = await self.gateway.call(tool_name, case_id=self.case_id, **arguments)
                     break
-                except (RuntimeError, ValueError):
-                    break  # deterministic tool error or invalid envelope: do not retry
+                except (RuntimeError, ValueError) as err:
+                    msg = str(err).lower()
+                    if "not found" in msg or "does not exist" in msg:
+                        break
+                    if attempt < MAX_ATTEMPTS:
+                        await asyncio.sleep(0.3)
+                    else:
+                        break
                 except Exception:
-                    if attempt == MAX_ATTEMPTS:
+                    if attempt < MAX_ATTEMPTS:
+                        await asyncio.sleep(0.3)
+                    else:
                         break
         self._cache[key] = evidence
         return evidence
@@ -208,9 +216,9 @@ async def resolve_entity(
 
     pending = [candidate for candidate in pool if candidate.decision is None]
     to_lookup, unassessed = pending[:MAX_ORDER_LOOKUPS], pending[MAX_ORDER_LOOKUPS:]
-    responses = await asyncio.gather(
-        *(session.call(TOOL_ORDER, order_id=c.order_id) for c in to_lookup)
-    )
+    responses = []
+    for c in to_lookup:
+        responses.append(await session.call(TOOL_ORDER, order_id=c.order_id))
     for candidate, evidence in zip(to_lookup, responses, strict=True):
         if evidence is not None:
             session.consumed(TOOL_ORDER, evidence)
