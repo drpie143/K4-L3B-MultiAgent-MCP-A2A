@@ -382,8 +382,6 @@ async def investigate_order_shipment(
         return result
 
     session = _Session(case_id, gateway, await _discover(gateway))
-    raw_scope = case.get("investigation_scope")
-    scope = raw_scope if isinstance(raw_scope, dict) else {}
     opened_at = first_datetime(case, ("opened_at",))
     cached_orders = getattr(entity, "order_evidence", {})
     if not isinstance(cached_orders, dict):
@@ -411,13 +409,6 @@ async def investigate_order_shipment(
             ref = evidence_ref_of(shipment_payload)
             if ref:
                 refs.append(ref)
-        if scope.get("include_product_context") is True:
-            product_payload = await session.call(PRODUCT_TOOL, order_id=order_id)
-            if isinstance(product_payload, dict):
-                _consume(trace, case_id, PRODUCT_TOOL, product_payload)
-                ref = evidence_ref_of(product_payload)
-                if ref:
-                    refs.append(ref)
         views.append(
             _analyze(
                 order_data,

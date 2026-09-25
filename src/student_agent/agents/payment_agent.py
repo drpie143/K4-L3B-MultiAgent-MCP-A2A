@@ -290,7 +290,23 @@ async def investigate_payment(
                             evidence_refs.append(ref)
                         found = _payment_rows(extra.get("data"))
                 rows.extend(found)
-        if refund_tool:
+        has_claims = "customer_request" in case
+        if not has_claims:
+            should_call_refund = True
+        else:
+            claims = case.get("customer_request", {}).get("claims", [])
+            refund_related = any(
+                isinstance(c, dict) and c.get("topic") in {"refund_pending", "refund_failed"}
+                for c in claims
+            )
+            has_refund_event = any(
+                isinstance(p, dict) and "refund" in str(p).lower()
+                for p in raw_payloads
+                if p
+            )
+            should_call_refund = refund_related or has_refund_event
+
+        if refund_tool and should_call_refund:
             payload = await _call(gateway, refund_tool, case_id, order_id)
             if payload is not None:
                 ref = _emit_consumed(trace, case_id, refund_tool, payload)

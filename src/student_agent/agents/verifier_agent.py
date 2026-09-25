@@ -516,7 +516,7 @@ def verify_and_finalize(
                 else "insufficient_evidence"
             )
 
-    rule = policy_rules.get(primary) if policy_rules else None
+    rule = (policy_rules or DEFAULT_POLICY_RULES).get(primary)
     if primary == "insufficient_evidence":
         case_status = "needs_investigation"
         recommended = 0.0
@@ -539,7 +539,14 @@ def verify_and_finalize(
             else "action_required"
         )
         case_status = rule.get("case_status", default_status)
-        recommended = float(rule.get("refund_brl", 0.0))
+        recommended = (
+            _recommend(primary, payment, shipment, ship_verdict) if entity_resolved else 0.0
+        )
+        if primary in {"late_delivery_seller", "late_delivery_logistics"} and ship_verdict not in {
+            "lost",
+            "returned",
+        }:
+            recommended = 0.0
         rec_action = rule.get("recommended_action")
         actions = [rec_action] if rec_action and case_status != "no_action" else []
         confidence = 0.95
