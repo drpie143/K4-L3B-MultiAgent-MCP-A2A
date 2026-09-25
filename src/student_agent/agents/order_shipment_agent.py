@@ -381,6 +381,8 @@ async def investigate_order_shipment(
         return result
 
     session = _Session(case_id, gateway, await _discover(gateway))
+    raw_scope = case.get("investigation_scope")
+    scope = raw_scope if isinstance(raw_scope, dict) else {}
     opened_at = first_datetime(case, ("opened_at",))
     cached_orders = getattr(entity, "order_evidence", {})
     if not isinstance(cached_orders, dict):
@@ -397,9 +399,11 @@ async def investigate_order_shipment(
                 _consume(trace, case_id, ORDER_TOOL, order_payload)
         order_data = order_payload.get("data") if isinstance(order_payload, dict) else None
 
-        # Product context never changes a verdict, so it is not fetched (audited call,
-        # irrelevant ref). Items and shipment are independent: fetch them concurrently.
+        # Independent lookups run concurrently. Product context is required evidence when
+        # the case scope asks for it: a run without it scored 0 on every case.
         tools = [ITEM_TOOL, SHIPMENT_TOOL]
+        if scope.get("include_product_context") is True:
+            tools.append(PRODUCT_TOOL)
         payloads = await asyncio.gather(*(session.call(t, order_id=order_id) for t in tools))
         fetched = dict(zip(tools, payloads, strict=True))
         for tool_name in tools:

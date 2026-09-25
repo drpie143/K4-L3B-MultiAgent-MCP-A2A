@@ -53,7 +53,9 @@ PENDING_TOKENS = {"pending", "processing", "review", "requested", "submitted"}
 COMPLETED_TOKENS = {"completed", "refunded", "success", "succeeded"}
 
 
-REFUND_TOPICS = {"refund_failed", "refund_pending"}
+# Claims about refunds, split payments and reconciliation need the refund timeline;
+# for other claims the tool usually errors (no refund) and each lookup is audited.
+REFUND_TOPICS = {"refund_failed", "refund_pending", "valid_split_payment", "payment_mismatch"}
 
 
 def _claim_needs_refund(case: dict[str, Any]) -> bool:
@@ -266,8 +268,6 @@ async def investigate_payment(
     payment_tool = _find_matching_tool(discovered, PAYMENT_TOOLS)
     refund_tool = _find_matching_tool(discovered, REFUND_TOOLS)
     if refund_tool and not _claim_needs_refund(case):
-        # Refund events in other cases belong to an unrelated timeline, and the tool errors
-        # when an order has none; each lookup is still an audited call.
         refund_tool = None
     fallback_payment = None
     if payment_tool == "get_payment_timeline" and "get_order_payments" in set(discovered):
